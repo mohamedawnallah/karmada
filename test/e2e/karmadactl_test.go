@@ -610,3 +610,81 @@ var _ = ginkgo.Describe("Karmadactl top testing", ginkgo.Labels{NeedCreateCluste
 		})
 	})
 })
+
+var _ = ginkgo.Describe("Karmadactl get testing", func() {
+	var member1 string
+	var member1Client kubernetes.Interface
+
+	ginkgo.BeforeEach(func() {
+		member1 = "member1"
+		member1Client = framework.GetClusterClient(member1)
+	})
+
+	ginkgo.Context("Test karmadactl get for existing resource", func() {
+		var namespace, podName string
+		var pod *corev1.Pod
+
+		ginkgo.BeforeEach(func() {
+			namespace = fmt.Sprintf("karmadatest-%s", rand.String(6))
+			podName = fmt.Sprintf("test-pod-%s", rand.String(6))
+			pod = helper.NewPod(namespace, podName)
+
+			// Create the namespace and pod in the member cluster.
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_, err := member1Client.CoreV1().Namespaces().Create(context.TODO(), ns, metav1.CreateOptions{})
+			gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+
+			_, err = member1Client.CoreV1().Pods(namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+			gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+		})
+
+		ginkgo.AfterEach(func() {
+			err := member1Client.CoreV1().Namespaces().Delete(context.TODO(), namespace, metav1.DeleteOptions{})
+			gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+		})
+
+		ginkgo.It("should get the existing pod successfully", func() {
+			cmd := framework.NewKarmadactlCommand(kubeconfig, karmadaContext, karmadactlPath, namespace, karmadactlTimeout, "get", "pods", podName, "-C", member1)
+			output, err := cmd.ExecOrDie()
+			gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+			gomega.Expect(strings.Contains(output, podName)).Should(gomega.BeTrue())
+		})
+	})
+
+	ginkgo.Context("Test karmadactl get for non-existing resource", func() {
+		var namespace, podName string
+
+		ginkgo.BeforeEach(func() {
+			namespace = fmt.Sprintf("karmadatest-%s", rand.String(6))
+			podName = fmt.Sprintf("non-existent-pod-%s", rand.String(6))
+		})
+
+		ginkgo.It("should return not found error for non-existing pod", func() {
+			cmd := framework.NewKarmadactlCommand(kubeconfig, karmadaContext, karmadactlPath, namespace, karmadactlTimeout, "get", "pods", podName, "-C", member1)
+			output, err := cmd.ExecOrDie()
+			gomega.Expect(err).Should(gomega.HaveOccurred())
+			fmt.Println("Error is: ", err, err.Error())
+			fmt.Println("Output is: ", output)
+			gomega.Expect(strings.Contains(err.Error(), fmt.Sprintf("pods \"%s\" not found", podName))).Should(gomega.BeTrue())
+		})
+	})
+
+	ginkgo.Context("Test karmadactl get with invalid input", func() {
+		var namespace string
+
+		ginkgo.BeforeEach(func() {
+			namespace = fmt.Sprintf("karmadatest-%s", rand.String(6))
+		})
+
+		ginkgo.It("should return error for invalid resource type", func() {
+			cmd := framework.NewKarmadactlCommand(kubeconfig, karmadaContext, karmadactlPath, namespace, karmadactlTimeout, "get", "invalidresource", "invalidname", "-C", member1)
+			_, err := cmd.ExecOrDie()
+			gomega.Expect(err).Should(gomega.HaveOccurred())
+			gomega.Expect(strings.Contains(err.Error(), "the server doesn't have a resource type \"invalidresource\"")).Should(gomega.BeTrue())
+		})
+	})
+})
