@@ -29,14 +29,15 @@ import (
 )
 
 var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", func() {
-	preemptingClusterName := "member2"
-	preemptedClusterName := "member1"
-
 	ginkgo.When("[PropagationPolicy Preemption] PropagationPolicy preempts another (Cluster)PropagationPolicy", func() {
 		ginkgo.Context("High-priority PropagationPolicy preempts low-priority PropagationPolicy", func() {
 			var highPriorityPolicy, lowPriorityPolicy *policyv1alpha1.PropagationPolicy
 			var deployment *appsv1.Deployment
+			var preemptingClusterName, preemptedClusterName string
+
 			ginkgo.BeforeEach(func() {
+				preemptingClusterName = framework.ClusterNames()[1]
+				preemptedClusterName = framework.ClusterNames()[0]
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				highPriorityPolicy = testhelper.NewExplicitPriorityPropagationPolicy(deployment.Namespace, deployment.Name+"high-pp", []policyv1alpha1.ResourceSelector{
 					{
@@ -95,7 +96,11 @@ var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", fu
 			var propagationPolicy *policyv1alpha1.PropagationPolicy
 			var clusterPropagationPolicy *policyv1alpha1.ClusterPropagationPolicy
 			var deployment *appsv1.Deployment
+			var preemptingClusterName, preemptedClusterName string
+
 			ginkgo.BeforeEach(func() {
+				preemptingClusterName = framework.ClusterNames()[1]
+				preemptedClusterName = framework.ClusterNames()[0]
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				propagationPolicy = testhelper.NewPropagationPolicy(deployment.Namespace, deployment.Name, []policyv1alpha1.ResourceSelector{
 					{
@@ -153,7 +158,11 @@ var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", fu
 		ginkgo.Context("High-priority PropagationPolicy reduces priority to be preempted by low-priority PropagationPolicy", func() {
 			var highPriorityPolicy, lowPriorityPolicy *policyv1alpha1.PropagationPolicy
 			var deployment *appsv1.Deployment
+			var preemptingClusterName, preemptedClusterName string
+
 			ginkgo.BeforeEach(func() {
+				preemptingClusterName = framework.ClusterNames()[1]
+				preemptedClusterName = framework.ClusterNames()[0]
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				highPriorityPolicy = testhelper.NewExplicitPriorityPropagationPolicy(deployment.Namespace, deployment.Name+"high-pp", []policyv1alpha1.ResourceSelector{
 					{
@@ -220,7 +229,11 @@ var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", fu
 		ginkgo.Context("High-priority ClusterPropagationPolicy preempts low-priority ClusterPropagationPolicy", func() {
 			var highPriorityPolicy, lowPriorityPolicy *policyv1alpha1.ClusterPropagationPolicy
 			var deployment *appsv1.Deployment
+			var preemptingClusterName, preemptedClusterName string
+
 			ginkgo.BeforeEach(func() {
+				preemptingClusterName = framework.ClusterNames()[1]
+				preemptedClusterName = framework.ClusterNames()[0]
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				highPriorityPolicy = testhelper.NewExplicitPriorityClusterPropagationPolicy(deployment.Name+"high-cpp", []policyv1alpha1.ResourceSelector{
 					{
@@ -278,7 +291,11 @@ var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", fu
 		ginkgo.Context("High-priority ClusterPropagationPolicy reduces priority to be preempted by low-priority ClusterPropagationPolicy", func() {
 			var highPriorityPolicy, lowPriorityPolicy *policyv1alpha1.ClusterPropagationPolicy
 			var deployment *appsv1.Deployment
+			var preemptingClusterName, preemptedClusterName string
+
 			ginkgo.BeforeEach(func() {
+				preemptingClusterName = framework.ClusterNames()[1]
+				preemptedClusterName = framework.ClusterNames()[0]
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				highPriorityPolicy = testhelper.NewExplicitPriorityClusterPropagationPolicy(deployment.Name+"high-cpp", []policyv1alpha1.ResourceSelector{
 					{
