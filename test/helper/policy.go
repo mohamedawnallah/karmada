@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
+	"github.com/karmada-io/karmada/test/e2e/framework"
 )
 
 // NewPropagationPolicy will build a PropagationPolicy object.
@@ -162,6 +163,7 @@ func NewClusterOverridePolicyByOverrideRules(policyName string, rsSelectors []po
 
 // NewFederatedResourceQuota will build a demo FederatedResourceQuota object.
 func NewFederatedResourceQuota(ns, name string) *policyv1alpha1.FederatedResourceQuota {
+	clusterNames := framework.ClusterNames()
 	return &policyv1alpha1.FederatedResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns,
@@ -174,14 +176,14 @@ func NewFederatedResourceQuota(ns, name string) *policyv1alpha1.FederatedResourc
 			},
 			StaticAssignments: []policyv1alpha1.StaticClusterAssignment{
 				{
-					ClusterName: "member1",
+					ClusterName: clusterNames[0],
 					Hard: map[corev1.ResourceName]resource.Quantity{
 						"cpu":    resource.MustParse("1"),
 						"memory": resource.MustParse("2Gi"),
 					},
 				},
 				{
-					ClusterName: "member2",
+					ClusterName: clusterNames[1],
 					Hard: map[corev1.ResourceName]resource.Quantity{
 						"cpu":    resource.MustParse("1"),
 						"memory": resource.MustParse("2Gi"),
