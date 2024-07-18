@@ -39,6 +39,9 @@ import (
 )
 
 var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
+	var member1 = framework.ClusterNames()[0]
+	var member2 = framework.ClusterNames()[1]
+
 	ginkgo.When("[PropagationPolicy] replica scheduling type is Duplicated", func() {
 		ginkgo.Context("schedule with multi clusterAffinity", func() {
 			var deployment *appsv1.Deployment
@@ -46,8 +49,8 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 			var member1LabelKey, member2LabelKey string
 
 			ginkgo.BeforeEach(func() {
-				member1LabelKey = "member1-" + rand.String(RandomStrLength)
-				member2LabelKey = "member2-" + rand.String(RandomStrLength)
+				member1LabelKey = fmt.Sprintf("%s-%s", member1, rand.String(RandomStrLength))
+				member2LabelKey = fmt.Sprintf("%s-%s", member2, rand.String(RandomStrLength))
 
 				deployment = testhelper.NewDeployment(testNamespace, deploymentNamePrefix+rand.String(RandomStrLength))
 				policy = testhelper.NewPropagationPolicy(deployment.Namespace, deployment.Name, []policyv1alpha1.ResourceSelector{
@@ -72,17 +75,17 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 						},
 						{
 							AffinityName:    "group4",
-							ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+							ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 						},
 					}})
 			})
 
 			ginkgo.BeforeEach(func() {
-				framework.UpdateClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: "ok"})
-				framework.UpdateClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: "ok"})
+				framework.UpdateClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: "ok"})
+				framework.UpdateClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: "ok"})
 				ginkgo.DeferCleanup(func() {
-					framework.DeleteClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: ""})
-					framework.DeleteClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: ""})
+					framework.DeleteClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: ""})
+					framework.DeleteClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: ""})
 				})
 			})
 
@@ -97,21 +100,21 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate deployment and then update the cluster label", func() {
 				// 1. wait for deployment present on member1 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member1", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member1, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 
 				// 2. update member1 cluster label to make it's unmatched with the policy
-				framework.UpdateClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: "not-ok"})
-				framework.WaitDeploymentDisappearOnCluster("member1", deployment.Namespace, deployment.Name)
+				framework.UpdateClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: "not-ok"})
+				framework.WaitDeploymentDisappearOnCluster(member1, deployment.Namespace, deployment.Name)
 
 				// 3. wait for deployment present on member2 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member2", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member2, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 
 				// 4. update member2 cluster label to make it's unmatched with the policy
-				framework.UpdateClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: "not-ok"})
-				framework.WaitDeploymentDisappearOnCluster("member2", deployment.Namespace, deployment.Name)
+				framework.UpdateClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: "not-ok"})
+				framework.WaitDeploymentDisappearOnCluster(member2, deployment.Namespace, deployment.Name)
 
 				// 5. wait for deployment present on member1 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member1", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member1, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 			})
 		})
 
@@ -128,7 +131,7 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 						Name:       deployment.Name,
 					},
 				}, policyv1alpha1.Placement{
-					ClusterAffinity: &policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+					ClusterAffinity: &policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 				})
 			})
 
@@ -143,18 +146,18 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate deployment and then update the cluster label", func() {
 				// 1. wait for deployment present on member1 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member1", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member1, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 
 				// 2. update policy placement with clusterAffinities
 				policy.Spec.Placement.ClusterAffinity = nil
 				policy.Spec.Placement.ClusterAffinities = []policyv1alpha1.ClusterAffinityTerm{{
 					AffinityName:    "group1",
-					ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member2"}},
+					ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member2}},
 				}}
 				framework.UpdatePropagationPolicyWithSpec(karmadaClient, policy.Namespace, policy.Name, policy.Spec)
 
 				// 3. wait for deployment present on member2 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member2", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member2, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 			})
 		})
 
@@ -173,7 +176,7 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 				}, policyv1alpha1.Placement{
 					ClusterAffinities: []policyv1alpha1.ClusterAffinityTerm{{
 						AffinityName:    "group1",
-						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 					}},
 				})
 			})
@@ -189,15 +192,15 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate deployment and then update the cluster label", func() {
 				// 1. wait for deployment present on member1 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member1", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member1, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 
 				// 2. update policy placement with clusterAffinities
-				policy.Spec.Placement.ClusterAffinity = &policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member2"}}
+				policy.Spec.Placement.ClusterAffinity = &policyv1alpha1.ClusterAffinity{ClusterNames: []string{member2}}
 				policy.Spec.Placement.ClusterAffinities = nil
 				framework.UpdatePropagationPolicyWithSpec(karmadaClient, policy.Namespace, policy.Name, policy.Spec)
 
 				// 3. wait for deployment present on member2 cluster
-				framework.WaitDeploymentPresentOnClusterFitWith("member2", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+				framework.WaitDeploymentPresentOnClusterFitWith(member2, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 			})
 		})
 	})
@@ -209,8 +212,8 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 			var member1LabelKey, member2LabelKey string
 
 			ginkgo.BeforeEach(func() {
-				member1LabelKey = "member1-" + rand.String(RandomStrLength)
-				member2LabelKey = "member2-" + rand.String(RandomStrLength)
+				member1LabelKey = fmt.Sprintf("%s-%s", member1, rand.String(RandomStrLength))
+				member2LabelKey = fmt.Sprintf("%s-%s", member2, rand.String(RandomStrLength))
 
 				clusterRole = testhelper.NewClusterRole(clusterRoleNamePrefix+rand.String(RandomStrLength), nil)
 				policy = testhelper.NewClusterPropagationPolicy(clusterRole.Name, []policyv1alpha1.ResourceSelector{
@@ -235,17 +238,17 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 						},
 						{
 							AffinityName:    "group4",
-							ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+							ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 						},
 					}})
 			})
 
 			ginkgo.BeforeEach(func() {
-				framework.UpdateClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: "ok"})
-				framework.UpdateClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: "ok"})
+				framework.UpdateClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: "ok"})
+				framework.UpdateClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: "ok"})
 				ginkgo.DeferCleanup(func() {
-					framework.DeleteClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: ""})
-					framework.DeleteClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: ""})
+					framework.DeleteClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: ""})
+					framework.DeleteClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: ""})
 				})
 			})
 
@@ -260,21 +263,21 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate clusterRole and then update the cluster label", func() {
 				// 1. wait for clusterRole present on member1 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member1", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member1, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 
 				// 2. update member1 cluster label to make it's unmatched with the policy
-				framework.UpdateClusterLabels(karmadaClient, "member1", map[string]string{member1LabelKey: "not-ok"})
-				framework.WaitClusterRoleDisappearOnCluster("member1", clusterRole.Name)
+				framework.UpdateClusterLabels(karmadaClient, member1, map[string]string{member1LabelKey: "not-ok"})
+				framework.WaitClusterRoleDisappearOnCluster(member1, clusterRole.Name)
 
 				// 3. wait for clusterRole present on member2 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member2", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member2, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 
 				// 4. update member2 cluster label to make it's unmatched with the policy
-				framework.UpdateClusterLabels(karmadaClient, "member2", map[string]string{member2LabelKey: "not-ok"})
-				framework.WaitClusterRoleDisappearOnCluster("member2", clusterRole.Name)
+				framework.UpdateClusterLabels(karmadaClient, member2, map[string]string{member2LabelKey: "not-ok"})
+				framework.WaitClusterRoleDisappearOnCluster(member2, clusterRole.Name)
 
 				// 5. wait for deployment present on member1 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member1", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member1, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 			})
 		})
 
@@ -291,7 +294,7 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 						Name:       clusterRole.Name,
 					},
 				}, policyv1alpha1.Placement{
-					ClusterAffinity: &policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+					ClusterAffinity: &policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 				})
 			})
 
@@ -306,18 +309,18 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate clusterRole and then update the cluster label", func() {
 				// 1. wait for clusterRole present on member1 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member1", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member1, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 
 				// 2. update policy placement with clusterAffinities
 				policy.Spec.Placement.ClusterAffinity = nil
 				policy.Spec.Placement.ClusterAffinities = []policyv1alpha1.ClusterAffinityTerm{{
 					AffinityName:    "group1",
-					ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member2"}},
+					ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member2}},
 				}}
 				framework.UpdateClusterPropagationPolicyWithSpec(karmadaClient, policy.Name, policy.Spec)
 
 				// 3. wait for clusterRole present on member2 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member2", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member2, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 			})
 		})
 
@@ -336,7 +339,7 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 				}, policyv1alpha1.Placement{
 					ClusterAffinities: []policyv1alpha1.ClusterAffinityTerm{{
 						AffinityName:    "group1",
-						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 					}},
 				})
 			})
@@ -352,15 +355,15 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 
 			ginkgo.It("propagate clusterRole and then update the cluster label", func() {
 				// 1. wait for clusterRole present on member1 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member1", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member1, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 
 				// 2. update policy placement with clusterAffinities
-				policy.Spec.Placement.ClusterAffinity = &policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member2"}}
+				policy.Spec.Placement.ClusterAffinity = &policyv1alpha1.ClusterAffinity{ClusterNames: []string{member2}}
 				policy.Spec.Placement.ClusterAffinities = nil
 				framework.UpdateClusterPropagationPolicyWithSpec(karmadaClient, policy.Name, policy.Spec)
 
 				// 3. wait for clusterRole present on member2 cluster
-				framework.WaitClusterRolePresentOnClusterFitWith("member2", clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
+				framework.WaitClusterRolePresentOnClusterFitWith(member2, clusterRole.Name, func(*rbacv1.ClusterRole) bool { return true })
 			})
 		})
 	})
@@ -386,11 +389,11 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 				ClusterAffinities: []policyv1alpha1.ClusterAffinityTerm{
 					{
 						AffinityName:    "group1",
-						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member1"}},
+						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member1}},
 					},
 					{
 						AffinityName:    "group2",
-						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{"member2"}},
+						ClusterAffinity: policyv1alpha1.ClusterAffinity{ClusterNames: []string{member2}},
 					}}})
 		})
 
@@ -406,30 +409,30 @@ var _ = ginkgo.Describe("[ClusterAffinities] propagation testing", func() {
 		ginkgo.It("deployment failover testing", func() {
 			// 1. set cluster member1 condition status to false
 			ginkgo.By("set cluster member1 condition status to false", func() {
-				err := disableCluster(controlPlaneClient, "member1")
+				err := disableCluster(controlPlaneClient, member1)
 				gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
 
-				framework.WaitClusterFitWith(controlPlaneClient, "member1", func(cluster *clusterv1alpha1.Cluster) bool {
+				framework.WaitClusterFitWith(controlPlaneClient, member1, func(cluster *clusterv1alpha1.Cluster) bool {
 					return helper.TaintExists(cluster.Spec.Taints, controllercluster.NotReadyTaintTemplate)
 				})
 			})
 
 			// 2. wait for deployment present on member2 cluster
-			framework.WaitDeploymentPresentOnClusterFitWith("member2", deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
+			framework.WaitDeploymentPresentOnClusterFitWith(member2, deployment.Namespace, deployment.Name, func(*appsv1.Deployment) bool { return true })
 
 			// 3. recover not ready cluster
 			ginkgo.By("recover not ready cluster", func() {
-				originalAPIEndpoint := getClusterAPIEndpoint("member1")
-				err := recoverCluster(controlPlaneClient, "member1", originalAPIEndpoint)
+				originalAPIEndpoint := getClusterAPIEndpoint(member1)
+				err := recoverCluster(controlPlaneClient, member1, originalAPIEndpoint)
 				gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
 
 				err = wait.PollUntilContextTimeout(context.TODO(), pollInterval, pollTimeout, true, func(_ context.Context) (done bool, err error) {
-					currentCluster, err := util.GetCluster(controlPlaneClient, "member1")
+					currentCluster, err := util.GetCluster(controlPlaneClient, member1)
 					if err != nil {
 						return false, err
 					}
 					if !helper.TaintExists(currentCluster.Spec.Taints, controllercluster.NotReadyTaintTemplate) {
-						fmt.Printf("cluster %s recovered\n", "member1")
+						fmt.Printf("cluster %s recovered\n", member1)
 						return true, nil
 					}
 					return false, nil

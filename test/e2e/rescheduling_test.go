@@ -163,6 +163,8 @@ var _ = ginkgo.Describe("[cluster unjoined] reschedule testing", func() {
 
 // reschedule testing is used to test the rescheduling situation when some clusters are joined and recovered
 var _ = ginkgo.Describe("[cluster joined] reschedule testing", func() {
+	clusterNames := framework.ClusterNames()
+
 	framework.SerialContext("Deployment propagation testing", ginkgo.Label(NeedCreateCluster), func() {
 		var newClusterName string
 		var homeDir string
@@ -269,7 +271,7 @@ var _ = ginkgo.Describe("[cluster joined] reschedule testing", func() {
 
 		ginkgo.Context("testing clusterAffinity of the policy", func() {
 			ginkgo.BeforeEach(func() {
-				initClusterNames = []string{"member1", "member2", newClusterName}
+				initClusterNames = []string{clusterNames[0], clusterNames[1], newClusterName}
 				policyNamespace = testNamespace
 				policyName = deploymentNamePrefix + rand.String(RandomStrLength)
 				deploymentNamespace = testNamespace
@@ -329,7 +331,7 @@ var _ = ginkgo.Describe("[cluster joined] reschedule testing", func() {
 
 				gomega.Eventually(func(gomega.Gomega) bool {
 					targetClusterNames := framework.ExtractTargetClustersFrom(controlPlaneClient, deployment)
-					return testhelper.IsExclude("member3", targetClusterNames)
+					return testhelper.IsExclude(clusterNames[2], targetClusterNames)
 				}, pollTimeout, pollInterval).Should(gomega.BeTrue())
 
 			})

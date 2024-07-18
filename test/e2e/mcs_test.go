@@ -46,8 +46,8 @@ import (
 )
 
 var (
-	serviceExportClusterName = "member1"
-	serviceImportClusterName = "member2"
+	serviceExportClusterName = framework.ClusterNames()[0]
+	serviceImportClusterName = framework.ClusterNames()[1]
 
 	serviceExportResource = "serviceexports"
 	serviceImportResource = "serviceimports"
@@ -529,7 +529,7 @@ var _ = ginkgo.Describe("CrossCluster MultiClusterService testing", func() {
 	})
 
 	// case 1: ProviderClusters field is [member1], ConsumerClusters field is [member2]
-	ginkgo.Context("ProviderClusters field is [member1], ConsumerClusters field is [member2]", func() {
+	ginkgo.Context(fmt.Sprintf("ProviderClusters field is [%s], ConsumerClusters field is [%s]", member1Name, member2Name), func() {
 		var mcs *networkingv1alpha1.MultiClusterService
 
 		ginkgo.BeforeEach(func() {
@@ -562,7 +562,7 @@ var _ = ginkgo.Describe("CrossCluster MultiClusterService testing", func() {
 	})
 
 	// case 2: ProviderClusters field is [member1,member2], ConsumerClusters field is [member2]
-	ginkgo.Context("ProviderClusters field is [member1,member2], ConsumerClusters field is [member2]", func() {
+	ginkgo.Context(fmt.Sprintf("ProviderClusters field is [%s,%s], ConsumerClusters field is [%s]", member1Name, member2Name, member2Name), func() {
 		var mcs *networkingv1alpha1.MultiClusterService
 
 		ginkgo.BeforeEach(func() {
@@ -642,7 +642,7 @@ var _ = ginkgo.Describe("CrossCluster MultiClusterService testing", func() {
 	})
 
 	// case 4: ProviderClusters field is empty, ConsumerClusters field is [member2]
-	ginkgo.Context("ProviderClusters field is empty, ConsumerClusters field is [member2]", func() {
+	ginkgo.Context(fmt.Sprintf("ProviderClusters field is empty, ConsumerClusters field is [%s]", member2Name), func() {
 		var mcs *networkingv1alpha1.MultiClusterService
 
 		ginkgo.BeforeEach(func() {
@@ -675,7 +675,7 @@ var _ = ginkgo.Describe("CrossCluster MultiClusterService testing", func() {
 	})
 
 	// case 5: ProviderClusters field is [member1], ConsumerClusters field is empty
-	ginkgo.Context("ProviderClusters field is [member1], ConsumerClusters field is empty", func() {
+	ginkgo.Context(fmt.Sprintf("ProviderClusters field is [%s], ConsumerClusters field is empty", member1Name), func() {
 		var mcs *networkingv1alpha1.MultiClusterService
 
 		ginkgo.BeforeEach(func() {

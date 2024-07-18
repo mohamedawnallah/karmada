@@ -50,13 +50,13 @@ import (
 )
 
 var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordered, func() {
-	var member1 = "member1"
-	var member2 = "member2"
+	var member1 = framework.ClusterNames()[0]
+	var member2 = framework.ClusterNames()[1]
 
-	var member1NodeName = "member1-control-plane"
-	var member2NodeName = "member2-control-plane"
-	var member1PodName = "etcd-member1-control-plane"
-	var member2PodName = "etcd-member2-control-plane"
+	var member1NodeName = fmt.Sprintf("%s-control-plane", member1)
+	var member2NodeName = fmt.Sprintf("%s-control-plane", member2)
+	var member1PodName = fmt.Sprintf("etcd-%s-control-plane", member1)
+	var member2PodName = fmt.Sprintf("etcd-%s-control-plane", member2)
 	var existsDeploymentName = "coredns"
 	var existsServiceName = "kubernetes"
 	var existsDaemonsetName = "kube-proxy"
@@ -98,7 +98,7 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 	// use deployment, node, pod as search object
 	ginkgo.Describe("create ResourceRegistry testings", func() {
 		// use deployment as search object
-		ginkgo.Context("caching cluster member1", ginkgo.Ordered, func() {
+		ginkgo.Context(fmt.Sprintf("caching cluster %s", member1), ginkgo.Ordered, func() {
 			var rrName string
 			var rr *searchv1alpha1.ResourceRegistry
 			var m1DmName, m2DmName string
@@ -108,13 +108,13 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 			ginkgo.BeforeAll(func() {
 				member1Client = framework.GetClusterClient(member1)
 				gomega.Expect(member1Client).ShouldNot(gomega.BeNil())
-				m1DmName = "rr-member1-deployment-" + rand.String(RandomStrLength)
+				m1DmName = fmt.Sprintf("rr-%s-deployment-%s", member1, rand.String(RandomStrLength))
 				m1Dm = testhelper.NewDeployment(testNamespace, m1DmName)
 				framework.CreateDeployment(member1Client, m1Dm)
 
 				member2Client = framework.GetClusterClient(member2)
 				gomega.Expect(member2Client).ShouldNot(gomega.BeNil())
-				m2DmName = "rr-member2-deployment-" + rand.String(RandomStrLength)
+				m2DmName = fmt.Sprintf("rr-%s-deployment-%s", member2, rand.String(RandomStrLength))
 				m2Dm = testhelper.NewDeployment(testNamespace, m2DmName)
 				framework.CreateDeployment(member2Client, m2Dm)
 
@@ -144,19 +144,19 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 				framework.RemoveResourceRegistry(karmadaClient, rrName)
 			})
 
-			ginkgo.It("[member1 deployments] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s deployments] should be searchable", member1), func() {
 				searchObject(pathAllDeployments, existsDeploymentName, true)
 			})
 
-			ginkgo.It("[member2 deployments] should be not searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s deployments] should be not searchable", member2), func() {
 				searchObject(pathAllDeployments, m2DmName, false)
 			})
 
-			ginkgo.It("[member1 deployments namespace] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s deployments namespace] should be searchable", member1), func() {
 				searchObject(fmt.Sprintf(pathNSDeploymentsFmt, testNamespace), m1DmName, true)
 			})
 
-			ginkgo.It("[member2 deployments namespace] should be not searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s deployments namespace] should be not searchable", member2), func() {
 				searchObject(fmt.Sprintf(pathNSDeploymentsFmt, testNamespace), m2DmName, false)
 			})
 
@@ -166,7 +166,7 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 		})
 
 		// use node as search object
-		ginkgo.Context("caching cluster member1 & member2", ginkgo.Ordered, func() {
+		ginkgo.Context(fmt.Sprintf("caching cluster %s & %s", member1, member2), ginkgo.Ordered, func() {
 			var rrName string
 			var rr *searchv1alpha1.ResourceRegistry
 
@@ -195,11 +195,11 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 				framework.RemoveResourceRegistry(karmadaClient, rrName)
 			})
 
-			ginkgo.It("[member1 nodes] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s nodes] should be searchable", member1), func() {
 				searchObject(pathAllNodes, member1NodeName, true)
 			})
 
-			ginkgo.It("[member2 nodes] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s nodes] should be searchable", member2), func() {
 				searchObject(pathAllNodes, member2NodeName, true)
 			})
 		})
@@ -256,11 +256,11 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 				framework.RemoveResourceRegistry(karmadaClient, rr2Name)
 			})
 
-			ginkgo.It("[member1 pods] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s pods] should be searchable", member1), func() {
 				searchObject(pathAllPods, member1PodName, true)
 			})
 
-			ginkgo.It("[member2 pods] should be searchable", func() {
+			ginkgo.It(fmt.Sprintf("[%s pods] should be searchable", member2), func() {
 				searchObject(pathAllPods, member2PodName, true)
 			})
 		})
@@ -576,9 +576,9 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 
 				ginkgo.It("could list nodes", func() {
 					fromM1 := framework.GetResourceNames(m1Dynamic.Resource(nodeGVR))
-					ginkgo.By("list nodes from member1: " + strings.Join(sets.List(fromM1), ","))
+					ginkgo.By(fmt.Sprintf("list nodes from %s: %s", member1, strings.Join(sets.List(fromM1), ",")))
 					fromM2 := framework.GetResourceNames(m2Dynamic.Resource(nodeGVR))
-					ginkgo.By("list nodes from member2: " + strings.Join(sets.List(fromM2), ","))
+					ginkgo.By(fmt.Sprintf("list nodes from %s: %s", member2, strings.Join(sets.List(fromM2), ",")))
 					fromMembers := sets.New[string]().Union(fromM1).Union(fromM2)
 
 					var proxyList *corev1.NodeList
@@ -612,11 +612,11 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 				ginkgo.It("could chunk list nodes", func() {
 					fromM1, err := m1Client.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 					gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
-					ginkgo.By(fmt.Sprintf("list %v nodes from member1", len(fromM1.Items)))
+					ginkgo.By(fmt.Sprintf("list %v nodes from %s", len(fromM1.Items), member1))
 
 					fromM2, err := m2Client.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 					gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
-					ginkgo.By(fmt.Sprintf("list %v nodes from member2", len(fromM2.Items)))
+					ginkgo.By(fmt.Sprintf("list %v nodes from %s", len(fromM2.Items), member2))
 
 					total := len(fromM1.Items) + len(fromM2.Items)
 					if total < 2 {
@@ -726,11 +726,11 @@ var _ = ginkgo.Describe("[karmada-search] karmada search testing", ginkgo.Ordere
 
 // test when cluster joined, updated, karmada will reconcile search cache
 var _ = framework.SerialDescribe("reconcile ResourceRegistry when clusters joined, updated", func() {
-	var member1 = "member1"
-	var member2 = "member2"
+	var member1 = framework.ClusterNames()[0]
+	var member2 = framework.ClusterNames()[1]
 
-	var member1PodName = "etcd-member1-control-plane"
-	var member2PodName = "etcd-member2-control-plane"
+	var member1PodName = fmt.Sprintf("etcd-%s-control-plane", member1)
+	var member2PodName = fmt.Sprintf("etcd-%s-control-plane", member2)
 	var existsDeploymentName = "coredns"
 
 	var pathPrefix = "/apis/search.karmada.io/v1alpha1/search/cache/"

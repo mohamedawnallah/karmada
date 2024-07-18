@@ -29,8 +29,8 @@ import (
 )
 
 var _ = ginkgo.Describe("[Preemption] propagation policy preemption testing", func() {
-	preemptingClusterName := "member2"
-	preemptedClusterName := "member1"
+	preemptingClusterName := framework.ClusterNames()[1]
+	preemptedClusterName := framework.ClusterNames()[0]
 
 	ginkgo.When("[PropagationPolicy Preemption] PropagationPolicy preempts another (Cluster)PropagationPolicy", func() {
 		ginkgo.Context("High-priority PropagationPolicy preempts low-priority PropagationPolicy", func() {
