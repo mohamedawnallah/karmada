@@ -42,6 +42,7 @@ import (
 	bootstrapapi "k8s.io/cluster-bootstrap/token/api"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	k8syaml "sigs.k8s.io/yaml"
 
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
@@ -1522,7 +1523,7 @@ var _ = ginkgo.Describe("Karmadactl apply testing", func() {
 // - error: An error if there was an issue during the process, otherwise nil.
 func WriteYamlToFile(obj interface{}, filePath string) error {
 	// Marshal the object to YAML.
-	yamlData, err := yaml.Marshal(obj)
+	yamlData, err := k8syaml.Marshal(obj)
 	if err != nil {
 		return err
 	}
