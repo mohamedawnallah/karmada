@@ -1633,7 +1633,9 @@ var _ = framework.OrderedDescribe("Karmadactl register testing", ginkgo.Labels{N
 			endpointRegex := regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})`)
 			endpointMatches := endpointRegex.FindStringSubmatch(output)
 			gomega.Expect(len(endpointMatches)).Should(gomega.BeNumerically(">=", 2))
-			karmadaAPIEndpoint = fmt.Sprintf("%s:%s", endpointMatches[1], endpointMatches[2])
+			fmt.Printf("Endpoint Matches: %v\n", endpointMatches)
+			karmadaAPIEndpoint, err = extractKarmadaAPIServerEndpoint(kubeconfig)
+			gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
 
 			// Extract token.
 			tokenRegex := regexp.MustCompile(`--token\s+(\S+)`)
