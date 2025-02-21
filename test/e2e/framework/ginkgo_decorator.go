@@ -32,3 +32,18 @@ func SerialContext(text string, args ...interface{}) bool {
 func SerialWhen(text string, args ...interface{}) bool {
 	return ginkgo.When(text, ginkgo.Serial, args)
 }
+
+// OrderedDescribe is wrapper function for ginkgo.Describe with ginkgo.Ordered decorator.
+func OrderedDescribe(text string, args ...interface{}) bool {
+	return ginkgo.Describe(text, ginkgo.Ordered, args)
+}
+
+// OrderedContext is wrapper function for ginkgo.Context with ginkgo.Ordered decorator.
+func OrderedContext(text string, args ...interface{}) bool {
+	return ginkgo.Context(text, ginkgo.Ordered, args)
+}
+
+// OrderedWhen is wrapper function for ginkgo.When with ginkgo.Ordered decorator.
+func OrderedWhen(text string, args ...interface{}) bool {
+	return ginkgo.When(text, ginkgo.Ordered, args)
+}
