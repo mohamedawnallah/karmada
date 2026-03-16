@@ -97,6 +97,12 @@ permissions:
   # It needs write access to create backport PRs and post status comments on source PRs.
   pull-requests: write
 
+# When multiple labels are added, each triggers a separate run. This ensures only the last
+# run (which sees all labels) completes, cancelling earlier runs for the same PR.
+concurrency:
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   backport:
     name: Backport PR
