@@ -29,7 +29,7 @@
   "commitPaths": [],
   "dateSince": null,
   "dateUntil": null,
-  "fork": true,
+  "fork": false,
   "mainline": null,
   "resetAuthor": false,
   "signoff": false,
