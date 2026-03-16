@@ -105,16 +105,49 @@ jobs:
       && contains(join(github.event.pull_request.labels.*.name, ','), 'backport-to-')
     runs-on: ubuntu-latest
     steps:
+      # Idempotency check: the backport tool creates branches named
+      # "backport/{targetBranch}/pr-{number}" (matching the backportBranchName config).
+      # If all target branches already have a corresponding backport branch, skip the action.
+      - name: Check for existing backport branches
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          # Extract target branches from backport labels.
+          LABELS=$(echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | jq -r '.[] | select(startswith("backport-to-"))' | sed 's/^backport-to-//')
+
+          PENDING=""
+          for BRANCH in $LABELS; do
+            # Check if the backport branch already exists on the remote.
+            BACKPORT_BRANCH="backport/${BRANCH}/pr-${PR_NUMBER}"
+            if gh api "repos/${{ github.repository }}/branches/${BACKPORT_BRANCH}" --silent 2>/dev/null; then
+              echo "Branch $BACKPORT_BRANCH already exists, skipping."
+            else
+              PENDING="$PENDING $BRANCH"
+              echo "Branch $BACKPORT_BRANCH does not exist, will create."
+            fi
+          done
+
+          if [ -z "$PENDING" ]; then
+            echo "All backport branches already exist. Nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Backport Action
+        if: steps.check.outputs.skip != 'true'
         uses: sorenlouv/backport-github-action@v10.4.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           auto_backport_label_prefix: backport-to-
 
       - name: Info log
-        if: ${{ success() }}
+        if: steps.check.outputs.skip != 'true' && success()
         run: cat ~/.backport/backport.info.log
 
       - name: Debug log
-        if: ${{ failure() }}
+        if: steps.check.outputs.skip != 'true' && failure()
         run: cat ~/.backport/backport.debug.log
