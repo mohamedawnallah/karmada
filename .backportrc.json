@@ -33,7 +33,7 @@
   "mainline": null,
   "resetAuthor": false,
   "signoff": false,
-  "dir": "",
+  "dir": "~/.backport/repositories/",
   "maxNumber": 10,
   "multipleCommits": false,
   "multipleBranches": true,
