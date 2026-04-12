@@ -179,6 +179,10 @@ jobs:
           go-version-file: go.mod
       - name: install and start colima (docker)
         run: |
+          # colima: runs a Linux VM via Hypervisor.framework so Docker containers work on macOS
+          # docker: CLI to talk to the daemon inside the Colima VM
+          # docker-buildx: hack/docker.sh passes --provenance=false to docker build which requires
+          #   the buildx plugin; Colima's Docker does not include it by default
           brew install colima docker docker-buildx
           mkdir -p ~/.docker/cli-plugins
           ln -sf $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
