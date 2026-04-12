@@ -13,7 +13,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.actor }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 permissions:
-  contents: read  # for actions/checkout to fetch code  
+  contents: read  # for actions/checkout to fetch code
 jobs:
   golangci:
     name: lint
@@ -179,7 +179,9 @@ jobs:
           go-version-file: go.mod
       - name: install and start colima (docker)
         run: |
-          brew install colima docker
+          brew install colima docker docker-buildx
+          mkdir -p ~/.docker/cli-plugins
+          ln -sf $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
           colima start --cpu 4 --memory 8
       - name: install kind and kubectl
         run: brew install kind kubectl
