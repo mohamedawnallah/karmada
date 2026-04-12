@@ -165,8 +165,14 @@ jobs:
   e2e-macos:
     name: e2e test (macos-26-intel)
     needs: build
+    # Intel runner required: ARM macOS runners block nested virtualization
+    # (Apple Virtualization Framework limitation), so Colima cannot start a
+    # Linux VM on ARM. Intel runners have Hypervisor.framework enabled, allowing
+    # Colima to provision the Linux VM that Docker and kind run inside.
     runs-on: macos-26-intel
-    continue-on-error: true # informational until macos-26-intel local-up is proven stable
+    # continue-on-error: job failure will not block the overall workflow while the
+    # macos-26-intel local-up path is being validated. Remove once proven stable.
+    continue-on-error: true
     timeout-minutes: 90
     steps:
       - name: checkout code
