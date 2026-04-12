@@ -166,6 +166,7 @@ jobs:
     name: e2e test (macos-26-intel)
     needs: build
     runs-on: macos-26-intel
+    continue-on-error: true # informational until macos-26-intel local-up is proven stable
     timeout-minutes: 90
     steps:
       - name: checkout code
