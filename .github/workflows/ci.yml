@@ -204,31 +204,34 @@ jobs:
             docker info &>/dev/null && break
             sleep 2
           done
-          # Get the colima VM's vznat bridge IP from colima itself — this is the
-          # authoritative source. Do NOT detect it from inside Docker with
-          # 'ip addr': the VM has multiple 192.x.x.x interfaces (vznat at
-          # 192.168.64.x AND Lima usernet at 192.168.5.1) and grep picks
-          # whichever appears first, which is 192.168.5.1 — an internal Lima
-          # address that Docker containers cannot use for cross-cluster traffic.
+          # Detect the colima VM's vznat IP by SSHing into the VM and reading
+          # the network interfaces directly. This is more reliable than
+          # 'colima list -j': Lima may not populate the address field in its
+          # metadata for minutes (or at all within our window), whereas the
+          # VM's vznat interface (192.168.64.0/24) is configured during boot
+          # and visible via 'ip addr' as soon as SSH is available.
           #
-          # colima start + docker info succeeding does not mean the vznat
-          # bridge IP is populated yet in colima's metadata — retry until it is.
-          # Bind verification is handled by the dedicated step that follows.
-          echo "Waiting for colima vznat IP to be assigned..."
+          # IMPORTANT: we need the VM's IP, not the macOS host's IP.
+          # util::get_macos_ipaddress uses 'route get default' + 'ipconfig
+          # getifaddr' on the host, which returns the host-side vznat address
+          # (e.g. 192.168.64.1). Docker containers run INSIDE the VM and can
+          # only bind to the VM's own interfaces — so kind must be given the
+          # VM's vznat IP, not the host's.
+          echo "Detecting colima VM vznat IP via SSH..."
           COLIMA_IP=""
           for i in $(seq 1 30); do
-            COLIMA_IP=$(colima list -j 2>/dev/null \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['address'] if d and d[0].get('address') else '')" 2>/dev/null \
+            COLIMA_IP=$(colima ssh -- ip -4 addr show 2>/dev/null \
+              | awk '/inet 192\.168\.64\./{split($2,a,"/"); print a[1]; exit}' \
               || true)
             [[ -n "${COLIMA_IP}" ]] && break
             sleep 2
           done
           if [[ -n "${COLIMA_IP}" ]]; then
-            echo "Colima VM IP (vznat bridge): ${COLIMA_IP}"
+            echo "Colima VM vznat IP: ${COLIMA_IP}"
             # Verify Docker can actually bind to this IP before kind attempts it.
-            # colima start + docker info succeeding does not mean the vznat
-            # interface is bindable yet — this loop gates on the exact mechanism
-            # kind uses. Exits 1 on timeout so the job fails fast and visibly.
+            # The vznat interface being up does not guarantee Docker port binding
+            # works yet — this loop gates on the exact mechanism kind uses.
+            # Exits 1 on timeout so the job fails fast and visibly.
             echo "Waiting for Docker to be able to bind to ${COLIMA_IP}..."
             BIND_OK=false
             for i in $(seq 1 60); do
@@ -240,12 +243,13 @@ jobs:
               echo "ERROR: Docker could not bind to ${COLIMA_IP} after 120s — kind will fail"
               exit 1
             fi
-            # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress skips
-            # auto-detection and uses this confirmed-bindable IP.
+            # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress uses
+            # this confirmed-bindable VM IP and skips host-side auto-detection.
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
             echo "${COLIMA_IP} is confirmed bindable — kind is safe to run"
           else
-            echo "WARNING: could not obtain colima vznat IP — kind may fail with bind error"
+            echo "ERROR: could not detect colima VM vznat IP after 60s — aborting"
+            exit 1
           fi
       - name: install kind and kubectl
         run: brew install kind kubectl
