@@ -164,7 +164,6 @@ jobs:
           path: /tmp/karmada/
   e2e-macos:
     name: e2e test (macos-26-intel)
-    needs: build
     # Intel runner required: ARM macOS runners block nested virtualization
     # (Apple Virtualization Framework limitation), so Colima cannot start a
     # Linux VM on ARM. Intel runners have Hypervisor.framework enabled, allowing
