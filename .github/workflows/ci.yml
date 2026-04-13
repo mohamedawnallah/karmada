@@ -107,7 +107,7 @@ jobs:
           fail_ci_if_error: false
           verbose: true
   e2e:
-    name: e2e test
+    name: e2e test (ubuntu-22.04, ${{ matrix.k8s }})
     if: false # temporarily disabled — only testing macos e2e on this branch
     needs: build
     runs-on: ubuntu-22.04
