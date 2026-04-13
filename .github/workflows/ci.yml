@@ -170,8 +170,8 @@ jobs:
     # Linux VM on ARM. Intel runners have Hypervisor.framework enabled, allowing
     # Colima to provision the Linux VM that Docker and kind run inside.
     runs-on: macos-26-intel
-    # continue-on-error: job failure will not block the overall workflow while the
-    # macos-26-intel local-up path is being validated. Remove once proven stable.
+    # Job failure will not block the overall workflow while the macos-26-intel
+    # local-up path is being validated. Remove once proven stable.
     continue-on-error: true
     timeout-minutes: 90
     steps:
@@ -193,6 +193,24 @@ jobs:
           mkdir -p ~/.docker/cli-plugins
           ln -sf $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
           colima start --cpu 4 --memory 8
+          # Wait for the Docker daemon inside the colima VM to be fully ready.
+          echo "Waiting for Docker daemon to be ready..."
+          timeout 60 bash -c 'until docker info &>/dev/null; do sleep 2; done'
+          # Retrieve the colima VM IP and wait for its network interface to be
+          # bindable before kind attempts to publish ports to it. Without this
+          # wait, kind fails immediately with "cannot assign requested address"
+          # because colima's bridge interface is not yet up when kind runs.
+          COLIMA_IP=$(colima list -j 2>/dev/null \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['address'])" 2>/dev/null \
+            || true)
+          if [[ -n "${COLIMA_IP}" ]]; then
+            echo "Waiting for colima network interface ${COLIMA_IP} to be bindable..."
+            timeout 60 bash -c "until ping -c1 -t1 '${COLIMA_IP}' &>/dev/null 2>&1; do sleep 2; done"
+            # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress skips
+            # auto-detection and uses the confirmed-ready IP on all retry attempts.
+            echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
+            echo "Colima network interface is ready at ${COLIMA_IP}"
+          fi
       - name: install kind and kubectl
         run: brew install kind kubectl
       - name: setup e2e test environment
