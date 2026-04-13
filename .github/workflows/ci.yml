@@ -194,6 +194,7 @@ jobs:
           # docker-buildx: hack/docker.sh passes --provenance=false to docker build which requires
           #   the buildx plugin; Colima's Docker does not include it by default
           brew install colima docker docker-buildx
+          echo "colima version: $(colima version)"
           mkdir -p ~/.docker/cli-plugins
           ln -sf $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
           colima start --cpu 4 --memory 8
