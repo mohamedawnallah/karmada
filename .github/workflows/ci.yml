@@ -222,6 +222,8 @@ jobs:
           # only bind to the VM's own interfaces — so kind must be given the
           # VM's IP, not the host's.
           echo "Detecting colima VM IP via SSH..."
+          echo "VM network interfaces (ip -4 addr show):"
+          colima ssh -- ip -4 addr show 2>/dev/null || true
           COLIMA_IP=""
           for i in $(seq 1 30); do
             # Match 192.168.64.x (vznat, Apple Silicon) or 192.168.5.x (Lima
