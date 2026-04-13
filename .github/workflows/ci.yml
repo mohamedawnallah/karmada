@@ -108,6 +108,7 @@ jobs:
           verbose: true
   e2e:
     name: e2e test
+    if: false # temporarily disabled — only testing macos e2e on this branch
     needs: build
     runs-on: ubuntu-22.04
     strategy:
