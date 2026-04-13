@@ -225,7 +225,7 @@ jobs:
           COLIMA_IP=""
           for i in $(seq 1 30); do
             COLIMA_IP=$(colima ssh -- ip -4 addr show 2>/dev/null \
-              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); print a[1]; exit}' \
+              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); ip=a[1]; if(ip !~ /\.1$/) {print ip; exit}}' \
               || true)
             [[ -n "${COLIMA_IP}" ]] && break
             sleep 2
