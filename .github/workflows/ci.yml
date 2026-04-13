@@ -204,30 +204,34 @@ jobs:
             docker info &>/dev/null && break
             sleep 2
           done
-          # Detect the colima VM's vznat IP by SSHing into the VM and reading
+          # Detect the colima VM's IP by SSHing into the VM and reading
           # the network interfaces directly. This is more reliable than
           # 'colima list -j': Lima may not populate the address field in its
           # metadata for minutes (or at all within our window), whereas the
-          # VM's vznat interface (192.168.64.0/24) is configured during boot
-          # and visible via 'ip addr' as soon as SSH is available.
+          # VM's interface is configured during boot and visible via 'ip addr'
+          # as soon as SSH is available.
+          #
+          # Two subnets depending on the hypervisor backend:
+          #   192.168.64.0/24 — vznat (Apple Virtualization Framework, Apple Silicon)
+          #   192.168.5.0/24  — Lima usernet/SLIRP (QEMU, Intel)
           #
           # IMPORTANT: we need the VM's IP, not the macOS host's IP.
           # util::get_macos_ipaddress uses 'route get default' + 'ipconfig
-          # getifaddr' on the host, which returns the host-side vznat address
+          # getifaddr' on the host, which returns the host-side bridge address
           # (e.g. 192.168.64.1). Docker containers run INSIDE the VM and can
           # only bind to the VM's own interfaces — so kind must be given the
-          # VM's vznat IP, not the host's.
-          echo "Detecting colima VM vznat IP via SSH..."
+          # VM's IP, not the host's.
+          echo "Detecting colima VM IP via SSH..."
           COLIMA_IP=""
           for i in $(seq 1 30); do
             COLIMA_IP=$(colima ssh -- ip -4 addr show 2>/dev/null \
-              | awk '/inet 192\.168\.64\./{split($2,a,"/"); print a[1]; exit}' \
+              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); print a[1]; exit}' \
               || true)
             [[ -n "${COLIMA_IP}" ]] && break
             sleep 2
           done
           if [[ -n "${COLIMA_IP}" ]]; then
-            echo "Colima VM vznat IP: ${COLIMA_IP}"
+            echo "Colima VM IP: ${COLIMA_IP}"
             # Verify Docker can actually bind to this IP before kind attempts it.
             # The vznat interface being up does not guarantee Docker port binding
             # works yet — this loop gates on the exact mechanism kind uses.
@@ -248,7 +252,7 @@ jobs:
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
             echo "${COLIMA_IP} is confirmed bindable — kind is safe to run"
           else
-            echo "ERROR: could not detect colima VM vznat IP after 60s — aborting"
+            echo "ERROR: could not detect colima VM IP after 60s — aborting"
             exit 1
           fi
       - name: install kind and kubectl
