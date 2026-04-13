@@ -205,9 +205,18 @@ jobs:
           # 192.168.64.x AND Lima usernet at 192.168.5.1) and grep picks
           # whichever appears first, which is 192.168.5.1 — an internal Lima
           # address that Docker containers cannot use for cross-cluster traffic.
-          COLIMA_IP=$(colima list -j 2>/dev/null \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['address'])" 2>/dev/null \
-            || true)
+          #
+          # colima start + docker info succeeding does not mean the vznat
+          # bridge IP is populated yet in colima's metadata — retry until it is.
+          echo "Waiting for colima vznat IP to be assigned..."
+          COLIMA_IP=""
+          for i in $(seq 1 30); do
+            COLIMA_IP=$(colima list -j 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['address'] if d and d[0].get('address') else '')" 2>/dev/null \
+              || true)
+            [[ -n "${COLIMA_IP}" ]] && break
+            sleep 2
+          done
           if [[ -n "${COLIMA_IP}" ]]; then
             echo "Colima VM IP (vznat bridge): ${COLIMA_IP}"
             # Verify Docker can actually bind a port to this IP before kind
@@ -225,6 +234,8 @@ jobs:
             # auto-detection and uses this confirmed-bindable IP on all retry attempts.
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
             echo "Colima IP ${COLIMA_IP} is confirmed bindable by Docker"
+          else
+            echo "WARNING: could not obtain colima vznat IP — kind may fail with bind error"
           fi
       - name: install kind and kubectl
         run: brew install kind kubectl
