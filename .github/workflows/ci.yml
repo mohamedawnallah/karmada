@@ -200,23 +200,29 @@ jobs:
             docker info &>/dev/null && break
             sleep 2
           done
-          # Retrieve the colima VM IP and wait for its network interface to be
-          # bindable before kind attempts to publish ports to it. Without this
-          # wait, kind fails immediately with "cannot assign requested address"
-          # because colima's bridge interface is not yet up when kind runs.
-          COLIMA_IP=$(colima list -j 2>/dev/null \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['address'])" 2>/dev/null \
-            || true)
+          # Detect the colima VM IP from *inside* Docker (--net=host exposes the
+          # VM's own interfaces) so we get the exact IP that Docker can bind to
+          # when publishing ports. Pinging from the macOS host side is not
+          # sufficient: the host can reach the VM but Docker inside the VM may
+          # not yet be able to bind to that interface.
+          COLIMA_IP=$(docker run --rm --net=host alpine sh -c \
+            "ip addr | grep -oE 'inet 192\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print \$2}' | head -1" \
+            2>/dev/null || true)
           if [[ -n "${COLIMA_IP}" ]]; then
-            echo "Waiting for colima network interface ${COLIMA_IP} to be bindable..."
+            echo "Colima VM IP (detected from inside Docker): ${COLIMA_IP}"
+            # Verify Docker can actually bind a port to this IP before kind
+            # attempts it. Without this gate, kind fails with
+            # "cannot assign requested address".
+            echo "Waiting for Docker to be able to bind to ${COLIMA_IP}..."
             for i in $(seq 1 30); do
-              ping -c1 -t1 "${COLIMA_IP}" &>/dev/null 2>&1 && break
+              docker run --rm --publish "${COLIMA_IP}:19876:19876" alpine true \
+                &>/dev/null 2>&1 && break
               sleep 2
             done
             # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress skips
             # auto-detection and uses the confirmed-ready IP on all retry attempts.
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
-            echo "Colima network interface is ready at ${COLIMA_IP}"
+            echo "Colima VM IP is ready and bindable at ${COLIMA_IP}"
           fi
       - name: install kind and kubectl
         run: brew install kind kubectl
