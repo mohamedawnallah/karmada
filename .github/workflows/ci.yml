@@ -213,6 +213,7 @@ jobs:
           #
           # colima start + docker info succeeding does not mean the vznat
           # bridge IP is populated yet in colima's metadata — retry until it is.
+          # Bind verification is handled by the dedicated step that follows.
           echo "Waiting for colima vznat IP to be assigned..."
           COLIMA_IP=""
           for i in $(seq 1 30); do
@@ -224,21 +225,9 @@ jobs:
           done
           if [[ -n "${COLIMA_IP}" ]]; then
             echo "Colima VM IP (vznat bridge): ${COLIMA_IP}"
-            # Verify Docker can actually bind a port to this IP before kind
-            # attempts it. colima start returns before the vznat interface is
-            # fully bindable inside the VM — without this gate, kind fails with
-            # "cannot assign requested address". We test the exact mechanism
-            # kind uses (docker --publish to the host IP) so the race is gone.
-            echo "Waiting for Docker to be able to bind to ${COLIMA_IP}..."
-            for i in $(seq 1 30); do
-              docker run --rm --publish "${COLIMA_IP}:19876:19876" alpine true \
-                &>/dev/null 2>&1 && break
-              sleep 2
-            done
             # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress skips
-            # auto-detection and uses this confirmed-bindable IP on all retry attempts.
+            # auto-detection and uses this confirmed IP on all retry attempts.
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
-            echo "Colima IP ${COLIMA_IP} is confirmed bindable by Docker"
           else
             echo "WARNING: could not obtain colima vznat IP — kind may fail with bind error"
           fi
