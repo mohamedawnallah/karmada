@@ -247,6 +247,8 @@ jobs:
           else
             echo "WARNING: could not obtain colima vznat IP — kind may fail with bind error"
           fi
+      - name: install kind and kubectl
+        run: brew install kind kubectl
       - name: setup e2e test environment
         run: |
           export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
