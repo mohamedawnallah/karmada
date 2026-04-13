@@ -227,10 +227,10 @@ jobs:
           COLIMA_IP=""
           for i in $(seq 1 30); do
             # Match 192.168.64.x (vznat, Apple Silicon) or 192.168.5.x (Lima
-            # usernet, Intel/QEMU). Skip .1 addresses — those are the Lima
-            # gateway/DNS service interface, not the VM's own primary IP.
+            # usernet, Intel/QEMU). Take the first match — on Intel the VM's
+            # primary eth0 IP is 192.168.5.1/24 (assigned by DHCP from Lima).
             COLIMA_IP=$(colima ssh -- ip -4 addr show 2>/dev/null \
-              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); ip=a[1]; if(ip !~ /\.1$/) {print ip; exit}}' \
+              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); print a[1]; exit}' \
               || true)
             [[ -n "${COLIMA_IP}" ]] && break
             sleep 2
