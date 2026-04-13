@@ -200,19 +200,22 @@ jobs:
             docker info &>/dev/null && break
             sleep 2
           done
-          # Detect the colima VM IP from *inside* Docker (--net=host exposes the
-          # VM's own interfaces) so we get the exact IP that Docker can bind to
-          # when publishing ports. Pinging from the macOS host side is not
-          # sufficient: the host can reach the VM but Docker inside the VM may
-          # not yet be able to bind to that interface.
-          COLIMA_IP=$(docker run --rm --net=host alpine sh -c \
-            "ip addr | grep -oE 'inet 192\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print \$2}' | head -1" \
-            2>/dev/null || true)
+          # Get the colima VM's vznat bridge IP from colima itself — this is the
+          # authoritative source. Do NOT detect it from inside Docker with
+          # 'ip addr': the VM has multiple 192.x.x.x interfaces (vznat at
+          # 192.168.64.x AND Lima usernet at 192.168.5.1) and grep picks
+          # whichever appears first, which is 192.168.5.1 — an internal Lima
+          # address that Docker containers cannot use for cross-cluster traffic.
+          COLIMA_IP=$(colima list -j 2>/dev/null \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['address'])" 2>/dev/null \
+            || true)
           if [[ -n "${COLIMA_IP}" ]]; then
-            echo "Colima VM IP (detected from inside Docker): ${COLIMA_IP}"
+            echo "Colima VM IP (vznat bridge): ${COLIMA_IP}"
             # Verify Docker can actually bind a port to this IP before kind
-            # attempts it. Without this gate, kind fails with
-            # "cannot assign requested address".
+            # attempts it. colima start returns before the vznat interface is
+            # fully bindable inside the VM — without this gate, kind fails with
+            # "cannot assign requested address". We test the exact mechanism
+            # kind uses (docker --publish to the host IP) so the race is gone.
             echo "Waiting for Docker to be able to bind to ${COLIMA_IP}..."
             for i in $(seq 1 30); do
               docker run --rm --publish "${COLIMA_IP}:19876:19876" alpine true \
@@ -220,9 +223,9 @@ jobs:
               sleep 2
             done
             # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress skips
-            # auto-detection and uses the confirmed-ready IP on all retry attempts.
+            # auto-detection and uses this confirmed-bindable IP on all retry attempts.
             echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
-            echo "Colima VM IP is ready and bindable at ${COLIMA_IP}"
+            echo "Colima IP ${COLIMA_IP} is confirmed bindable by Docker"
           fi
       - name: install kind and kubectl
         run: brew install kind kubectl
