@@ -164,7 +164,11 @@ jobs:
           name: karmada_kind_log_${{ matrix.k8s }}
           path: /tmp/karmada/
   e2e-macos:
-    name: e2e test (macos)
+    name: e2e test (macos-26-intel, ${{ matrix.k8s }})
+    strategy:
+      fail-fast: false
+      matrix:
+        k8s: [ v1.35.0 ]
     # Intel runner required: ARM macOS runners block nested virtualization
     # (Apple Virtualization Framework limitation), so Colima cannot start a
     # Linux VM on ARM. Intel runners have Hypervisor.framework enabled, allowing
@@ -269,7 +273,7 @@ jobs:
           echo "${COLIMA_IP} is confirmed bindable — kind is safe to run"
       - name: setup e2e test environment
         run: |
-          export CLUSTER_VERSION=kindest/node:v1.35.0
+          export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
           export KUBE_CACHE_MUTATION_DETECTOR=true
           hack/local-up-karmada.sh
       - name: verify control plane
