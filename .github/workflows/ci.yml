@@ -211,22 +211,15 @@ jobs:
           curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
             -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
           echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
-          # --cpu-type Haswell: use a named QEMU CPU model with SSE4.2 + AVX + AVX2.
-          # Go 1.25's pre-compiled toolchain binaries require at least x86-64-v2
-          # (SSE4.2 + POPCNT) and crash with 'signal: illegal instruction' on
-          # QEMU's default 'qemu64' model. '--cpu-type host' would expose all host
-          # CPU features but fails to start on CI runners that are themselves VMs
-          # (nested virtualisation). 'Haswell' is a concrete CPU model that QEMU
-          # can configure reliably in nested environments and provides the needed
-          # instruction set extensions.
-          # --vm-type qemu: colima 0.10.1 defaults to VZ (Apple Virtualization
-          # Framework) on macOS 26 runners, but --cpu-type Haswell is a QEMU-specific
-          # flag. When VZ is selected, the Haswell flag is ignored and the VM hangs
-          # after reaching "running" state because SSH init fails under VZ with an
-          # unexpected CPU config. Forcing QEMU ensures Haswell is properly applied
-          # as the QEMU -cpu model, giving Go 1.25 the SSE4.2+AVX it requires.
-          # --verbose surfaces colima/lima/QEMU logs so hangs are diagnosable in CI.
-          colima start --cpu 6 --memory 12 --vm-type qemu --cpu-type Haswell --verbose
+          # --vm-type vz: Apple Virtualization Framework (VZ) is the only hypervisor
+          # available on macOS-26 runners — QEMU is not installed (qemu-img not found).
+          # VZ on Intel Mac exposes the native physical CPU, which already includes
+          # SSE4.2 + AVX + AVX2, so Go 1.25's pre-compiled toolchain runs without
+          # 'signal: illegal instruction'. No --cpu-type needed: that flag is
+          # QEMU-specific; passing it to VZ corrupted Lima's VZ network/SSH config
+          # and caused the VM to hang after reaching 'running' state.
+          # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
+          colima start --cpu 6 --memory 12 --vm-type vz --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
