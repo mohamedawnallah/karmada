@@ -253,9 +253,9 @@ jobs:
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
           # Extract the VM's vmnet IP assigned by --network-address.
-          # colima list -o json exposes it as the 'ip_address' field (empty string or
-          # absent when --network-address was not used).
-          VM_IP=$(colima list -o json 2>/dev/null | python3 -c "import json,sys; print(next((i['ip_address'] for i in json.load(sys.stdin) if i.get('ip_address') and i['ip_address'] != '127.0.0.1'), ''))" 2>/dev/null || echo "")
+          # 'colima list -o json' does NOT populate the ip_address field (omitempty bug);
+          # parse the text table instead: last column of the data row is the ADDRESS.
+          VM_IP=$(colima list 2>/dev/null | awk 'NR==2 && NF>=8 {print $NF}')
           if [[ -z "${VM_IP}" ]]; then
             echo "ERROR: --network-address did not produce a routable VM IP."
             echo "colima list:"; colima list
