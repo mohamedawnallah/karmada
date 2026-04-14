@@ -260,15 +260,22 @@ jobs:
           # time and completes successfully. This is expected behaviour.
           #
           # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
-          # --dns 8.8.8.8: Lima's DNS proxy (port 53 on the host) fails to bind
-          # when the runner's systemd-resolved already owns port 53, causing the VM's
-          # default resolver (192.168.5.1) to time out. Using Google DNS directly
-          # inside the VM bypasses the broken proxy and keeps docker pull working.
-          # --cpu 4 --memory 6: leave headroom on the macOS host for 'go build'
-          # which cross-compiles karmada binaries on the host AFTER colima starts.
-          # With 6 CPUs/12GB the host was OOM-starved and go build was SIGKILL'd
-          # (reported as "cancelled" by GitHub Actions after ~2m44s of silence).
-          colima start --cpu 4 --memory 6 --vm-type vz --network-address --dns 8.8.8.8 --dns 8.8.4.4 --verbose
+          # DNS for Docker containers inside the VM fails via two routes:
+          #   1. Lima's usernet DNS (192.168.5.1:53): Lima's DNS proxy requires
+          #      binding 0.0.0.0:53 on the host — but the host already has a DNS
+          #      service there → Lima can't bind → usernet DNS unresponsive → i/o timeout.
+          #   2. External DNS (8.8.8.8 etc.): blocked by the runner's Azure datacenter
+          #      network (outbound UDP/TCP port 53 to external IPs is restricted).
+          # Fix: use the HOST's own DNS resolver via the vmnet interface.
+          #   The host always gets 192.168.64.1 on the vmnet (colima assigns the VM
+          #   192.168.64.2 in the 192.168.64.0/24 subnet). Since the host has 0.0.0.0:53
+          #   bound, it is reachable at 192.168.64.1:53 from the VM. Docker daemon reads
+          #   the VM's /etc/resolv.conf (set by --dns) and forwards container DNS there.
+          #
+          # --cpu 4 --memory 6: leave headroom for 'go build' which cross-compiles
+          # karmada binaries on the macOS host AFTER colima starts. With 6 CPUs/12GB
+          # the host was OOM-starved and go build was SIGKILL'd after ~2m44s.
+          colima start --cpu 4 --memory 6 --vm-type vz --network-address --dns 192.168.64.1 --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
