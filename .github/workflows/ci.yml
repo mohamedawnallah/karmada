@@ -386,6 +386,8 @@ jobs:
             'echo "Port 53 listeners before restart:"; ss -ulnp | grep ":53 " || true' \
             'timeout 120 systemctl restart docker \' \
             '  || { echo "Docker restart FAILED (exit=$?):"; journalctl -u docker.service --no-pager -n 60; exit 1; }' \
+            'echo "Port 53 listeners AFTER restart:"; ss -ulnp | grep ":53 " || true' \
+            'echo "DoH proxy log after restart:"; cat /var/log/doh-proxy.log' \
             > "$DNS_SCRIPT"
           colima ssh -- sudo bash -s < "$DNS_SCRIPT"
           rm -f "$DNS_SCRIPT"
@@ -394,6 +396,23 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
+          # Pre-warm k2 (Docker embedded DNS upstream) with A records from macOS host.
+          # 'getent hosts' inside the VM sends AAAA queries (IPv6 preferred in Ubuntu),
+          # but Docker containers send A queries (IPv4). Without A-record cache entries,
+          # k2 gets a cache miss and must make a fresh DoH request during docker build —
+          # racing with kind image pulls that also hammer k2 simultaneously.
+          # 'dig @VM_IP A domain' sends an A query directly to k2 from the macOS host,
+          # populating the cache with the correct record type before docker build starts.
+          echo "Pre-warming k2 with A-record queries from macOS host..."
+          for domain in auth.docker.io registry-1.docker.io dl-cdn.alpinelinux.org registry.k8s.io; do
+            result=$(dig @"${VM_IP}" A "${domain}" +short +timeout=10 +tries=3 2>&1 | head -1)
+            if [[ -n "${result}" ]]; then
+              echo "k2 A-prewarm ${domain}: ${result}"
+            else
+              echo "WARNING: k2 A-prewarm FAILED for ${domain} — DNS may be unreliable for containers"
+            fi
+          done
+          echo "k2 A-record pre-warm complete."
           echo "Python DoH DNS fix applied."
           # Propagate to all subsequent steps via GITHUB_ENV.
           # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
