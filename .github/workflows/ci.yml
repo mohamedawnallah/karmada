@@ -180,6 +180,7 @@ jobs:
     timeout-minutes: 90
     env:
       COLIMA_VERSION: "0.10.1"
+      LIMA_VERSION: "v2.1.1"
       DOCKER_VERSION: "29.4.0"
       DOCKER_BUILDX_VERSION: "0.33.0"
       # Go and kind versions are pinned to match go.mod / hack/util.sh
@@ -195,6 +196,9 @@ jobs:
           # Install pinned versions directly from GitHub/Docker releases to avoid
           # silent version drift from brew. Versions are pinned in the job env block.
           #
+          # lima: colima is a wrapper around Lima — limactl must be on PATH before colima start
+          curl -fsSL "https://github.com/lima-vm/lima/releases/download/${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-x86_64.tar.gz" \
+            | tar -xz --strip=1 -C /usr/local
           # colima: runs a Linux VM via Hypervisor.framework so Docker containers work on macOS
           curl -fsSL "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-x86_64" \
             -o /usr/local/bin/colima && chmod +x /usr/local/bin/colima
