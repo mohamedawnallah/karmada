@@ -230,6 +230,13 @@ jobs:
           curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
             -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
           echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
+          # Download cloudflared Linux/amd64 NOW, before colima starts.
+          # colima's VZ --network-address adds bridge100 to macOS, which causes
+          # mDNSResponder to prefer the vmnet's broken DNS for host-side lookups.
+          # Downloading after colima start fails with curl: (6) Could not resolve host.
+          curl -fsSL -o /tmp/cloudflared \
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+          echo "cloudflared Linux/amd64 downloaded to /tmp/cloudflared ($(wc -c < /tmp/cloudflared) bytes)"
           # --vm-type vz: Apple Virtualization Framework (VZ) is the only hypervisor
           # available on macOS-26 runners — QEMU is not installed (qemu-img not found).
           # VZ on Intel Mac exposes the native physical CPU, so Go 1.25's pre-compiled
@@ -314,13 +321,9 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
-          # Fix VM DNS using cloudflared running inside the VM.
-          # IMPORTANT: the VM has no working DNS yet, so we CANNOT curl inside the
-          # VM to download cloudflared. Instead, download the Linux/amd64 binary on
-          # the macOS host (which has working DNS) and pipe it into the VM via stdin.
-          echo "Downloading cloudflared Linux/amd64 on macOS host..."
-          curl -fsSL -o /tmp/cloudflared \
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+          # Fix VM DNS using cloudflared DoH proxy (port 443, not blocked by Azure).
+          # cloudflared was downloaded before colima start (host DNS is broken after
+          # colima's VZ --network-address adds bridge100, which skews mDNSResponder).
           echo "Copying cloudflared binary to VM via colima ssh stdin..."
           cat /tmp/cloudflared | colima ssh -- \
             sudo bash -c 'cat > /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared'
