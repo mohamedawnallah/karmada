@@ -410,11 +410,10 @@ jobs:
           printf '%s\n' \
             '#!/bin/bash' \
             'set -e' \
+            'mkdir -p /tmp/alpine-build' \
             'curl -fsSL --retry 3 --retry-delay 2 \' \
             '  "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \' \
-            '  -o /tmp/alpine-rootfs.tar.gz' \
-            'mkdir -p /tmp/alpine-build' \
-            'mv /tmp/alpine-rootfs.tar.gz /tmp/alpine-build/' \
+            '  -o /tmp/alpine-build/alpine-minirootfs-3.23.3-x86_64.tar.gz' \
             'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
             'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3 /tmp/alpine-build/' \
             'rm -rf /tmp/alpine-build' \
