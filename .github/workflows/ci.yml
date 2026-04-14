@@ -228,6 +228,8 @@ jobs:
           # operate on the same Linux network stack — no cross-VM address mismatch.
           colima ssh -- bash -c "
             set -euo pipefail
+            # Install build essentials (make, gcc) needed by hack/local-up-karmada.sh
+            sudo apt-get update -qq && sudo apt-get install -y -qq make build-essential
             # Install Go (linux/amd64) to /usr/local/go
             curl -fsSL 'https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz' \
               | sudo tar -C /usr/local -xz
