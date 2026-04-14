@@ -191,7 +191,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - name: install and start colima (docker)
+      - name: install and start colima (docker) with network address
         run: |
           # Install pinned versions directly from GitHub/Docker releases to avoid
           # silent version drift from brew. Versions are pinned in the job env block.
@@ -213,24 +213,35 @@ jobs:
           echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
           # --vm-type vz: Apple Virtualization Framework (VZ) is the only hypervisor
           # available on macOS-26 runners — QEMU is not installed (qemu-img not found).
-          # VZ on Intel Mac exposes the native physical CPU, which already includes
-          # SSE4.2 + AVX + AVX2, so Go 1.25's pre-compiled toolchain runs without
-          # 'signal: illegal instruction'. No --cpu-type needed: that flag is
-          # QEMU-specific; passing it to VZ corrupted Lima's VZ network/SSH config
-          # and caused the VM to hang after reaching 'running' state.
+          # VZ on Intel Mac exposes the native physical CPU, so Go 1.25's pre-compiled
+          # toolchain runs without 'signal: illegal instruction'.
+          #
+          # --network-address: assigns a vmnet IP (e.g. 192.168.64.x) to the VM via
+          # VZ NAT networking. This IP is directly reachable from the macOS host,
+          # enabling hack scripts to run on the macOS host instead of inside the VM.
+          #
+          # How the network routing works end-to-end:
+          #  1. colima assigns VM a routable vmnet IP (VM_IP).
+          #  2. HOST_IPADDRESS=$VM_IP is exported; hack/setup-dev-base.sh injects
+          #       apiServerAddress: <VM_IP>
+          #     into each kind cluster config (member1/2/3 YAML, lines 125-127).
+          #  3. kind binds its API server on VM_IP inside the VM; Docker publishes
+          #       VM_IP:PORT → container:6443.
+          #  4. util::check_clusters_ready (darwin code path) calls
+          #       get_docker_host_ip_port → returns VM_IP:PORT from docker inspect.
+          #     kubeconfig server is set to https://VM_IP:PORT.
+          #  5. From macOS: VM_IP:PORT is reachable via the vmnet interface. ✓
+          #  6. From containers inside the VM: VM_IP is a local interface. ✓
+          #  No SSH tunnels, no port-forwarding patches needed.
           #
           # Note: colima 0.10.1 with VZ performs two VM starts in sequence (~4min
-          # overhead, not wasted compute). The first start boots the VM and gets SSH
-          # up, but colima's internal Docker-daemon readiness timer (~29s) fires before
-          # the Docker daemon responds inside the freshly booted VZ VM. Colima then
-          # sends SIGINT to the hostagent, reuses the already-initialised disk
-          # ("Using the existing instance"), and boots a second time — Docker starts
-          # faster on the warm disk and the second start completes successfully. There
-          # is no colima CLI flag to extend this internal timeout; the behaviour is
-          # normal and the net result is one running VM with Docker ready.
+          # overhead, not wasted compute). The first start boots the VM but colima's
+          # internal Docker-daemon readiness timer (~29s) fires before Docker responds.
+          # Colima then restarts from the warm disk — Docker starts faster the second
+          # time and completes successfully. This is expected behaviour.
           #
           # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
-          colima start --cpu 6 --memory 12 --vm-type vz --verbose
+          colima start --cpu 6 --memory 12 --vm-type vz --network-address --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
@@ -241,70 +252,84 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
-      - name: install Go, kind, and kubectl inside colima VM
+          # Extract the VM's vmnet IP assigned by --network-address.
+          # colima list -o json exposes it as the 'ip_address' field (empty string or
+          # absent when --network-address was not used).
+          VM_IP=$(colima list -o json 2>/dev/null | python3 -c "import json,sys; print(next((i['ip_address'] for i in json.load(sys.stdin) if i.get('ip_address') and i['ip_address'] != '127.0.0.1'), ''))" 2>/dev/null || echo "")
+          if [[ -z "${VM_IP}" ]]; then
+            echo "ERROR: --network-address did not produce a routable VM IP."
+            echo "colima list:"; colima list
+            exit 1
+          fi
+          echo "Colima VM vmnet IP: ${VM_IP}"
+          # Propagate to all subsequent steps via GITHUB_ENV.
+          # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
+          echo "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock" >> $GITHUB_ENV
+          # VM_IP: used below when invoking hack/local-up-karmada.sh.
+          echo "VM_IP=${VM_IP}" >> $GITHUB_ENV
+          # HOST_IPADDRESS: consumed by hack/setup-dev-base.sh to inject
+          #   apiServerAddress into kind configs and set the Karmada API server bind IP.
+          echo "HOST_IPADDRESS=${VM_IP}" >> $GITHUB_ENV
+          # MAC_NIC_IPADDRESS: honoured by util::get_macos_ipaddress (early-return path)
+          #   so the Karmada API server binds to VM_IP:5443 (reachable from macOS + VM).
+          echo "MAC_NIC_IPADDRESS=${VM_IP}" >> $GITHUB_ENV
+      - name: install Go, kind, and kubectl (macOS host)
         run: |
-          # All cluster tooling (Go, kind, kubectl) runs inside the Colima Linux VM.
-          # Running inside the VM eliminates the macOS/VM IP boundary that caused kind
-          # to fail: kind's net.Listen (port discovery) and Docker's port binding both
-          # operate on the same Linux network stack — no cross-VM address mismatch.
-          colima ssh -- bash -c "
-            set -euo pipefail
-            # Install build essentials (make, gcc) needed by hack/local-up-karmada.sh
-            sudo apt-get update -qq && sudo apt-get install -y -qq make build-essential
-            # Install Go (linux/amd64) to /usr/local/go
-            curl -fsSL 'https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz' \
-              | sudo tar -C /usr/local -xz
-            # Install kind (linux/amd64)
-            sudo curl -fsSL \
-              'https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64' \
-              -o /usr/local/bin/kind
-            sudo chmod +x /usr/local/bin/kind
-            # Install kubectl matching the k8s matrix version
-            sudo curl -fsSL \
-              'https://dl.k8s.io/release/${{ matrix.k8s }}/bin/linux/amd64/kubectl' \
-              -o /usr/local/bin/kubectl
-            sudo chmod +x /usr/local/bin/kubectl
-            export PATH=/usr/local/go/bin:/usr/local/bin:\$PATH
-            echo \"Installed inside VM: go=\$(go version) | kind=\$(kind version) | kubectl=\$(kubectl version --client)\"
-          "
+          # Tools run on the macOS host. Docker commands are forwarded to the colima VM
+          # daemon via DOCKER_HOST. Binaries that execute on the host (go, kind, kubectl,
+          # karmadactl) must be darwin/amd64 builds.
+          #
+          # go install (in setup-dev-base.sh step 2) compiles karmadactl as a darwin
+          # binary automatically because GOOS defaults to 'darwin' on the macOS host.
+          # make images sends docker build contexts to the VM's Docker daemon via
+          # DOCKER_HOST — compilation inside the image happens on Linux, unaffected
+          # by the host GOOS.
+          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.darwin-amd64.tar.gz" \
+            | sudo tar -C /usr/local -xz
+          sudo curl -fsSL \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-darwin-amd64" \
+            -o /usr/local/bin/kind && chmod +x /usr/local/bin/kind
+          sudo curl -fsSL \
+            "https://dl.k8s.io/release/${{ matrix.k8s }}/bin/darwin/amd64/kubectl" \
+            -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
+          export PATH=/usr/local/go/bin:$PATH
+          echo "Installed on macOS host: go=$(go version) | kind=$(kind version) | kubectl=$(kubectl version --client)"
       - name: setup e2e test environment
         run: |
-          # Run local-up-karmada.sh inside the Colima VM.
+          # Runs directly on macOS host — no colima ssh wrapper.
           #
-          # Inside the VM, go env GOOS=linux so util::get_macos_ipaddress is a no-op
-          # and HOST_IPADDRESS stays empty. kind therefore creates clusters with its
-          # default apiServerAddress (127.0.0.1), which it CAN bind on the VM's
-          # loopback. Docker is native (no cross-VM boundary), so port publishing
-          # works correctly too. util::check_clusters_ready uses the linux code path
-          # (Docker-native 172.x.y.z IPs) which are reachable by all containers.
-          #
-          # Lima mounts the macOS home directory into the VM at the same path, so
-          # the checked-out workspace is accessible inside the VM without any copy.
-          WORKSPACE="${{ github.workspace }}"
-          colima ssh -- bash -c "
-            set -euo pipefail
-            export PATH=/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:\$PATH
-            export GOPATH=\$HOME/go
-            export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
-            export KUBE_CACHE_MUTATION_DETECTOR=true
-            # Limit Go compiler parallelism to avoid GC crashes under QEMU memory
-            # pressure. 'unlock of unlocked lock' in compileFunctions is a runtime
-            # bug triggered when GC and parallel compilation compete for memory.
-            export GOMAXPROCS=4
-            cd '${WORKSPACE}'
-            hack/local-up-karmada.sh
-          "
+          # DOCKER_HOST → colima VM daemon: 'docker build' and kind cluster creation
+          #   happen inside the VM, but are driven from the macOS host.
+          # HOST_IPADDRESS=$VM_IP / MAC_NIC_IPADDRESS=$VM_IP (set in previous step):
+          #   hack/setup-dev-base.sh detects GOOS=darwin and calls
+          #   util::get_macos_ipaddress, which honours MAC_NIC_IPADDRESS and returns
+          #   VM_IP. All kind cluster configs get apiServerAddress: VM_IP injected,
+          #   and the Karmada API server is bound to VM_IP:5443.
+          # Kubeconfig endpoints end up as https://VM_IP:PORT — directly reachable
+          # from macOS via the vmnet interface created by --network-address.
+          export PATH=/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$PATH
+          export GOPATH=$HOME/go
+          export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
+          export KUBE_CACHE_MUTATION_DETECTOR=true
+          # hack/build.sh cross-compiles karmada binaries natively on the macOS host
+          # (GOOS=linux GOARCH=amd64 go build). Go 1.25 introduced
+          # runtime.defaultGOMAXPROCSUpdateEnable — a background goroutine that
+          # dynamically overrides GOMAXPROCS based on cgroup CPU quotas. Inside the
+          # colima VM (Linux, no CPU cgroup limit) this goroutine fired and bumped
+          # GOMAXPROCS back from 4 to 6, triggering GC crashes ('unlock of unlocked
+          # lock') in compileFunctions. On the macOS host there are no cgroups, so
+          # the updater goroutine cannot override this value — GOMAXPROCS=4 stays
+          # stable throughout compilation, preventing the GC race.
+          export GOMAXPROCS=4
+          hack/local-up-karmada.sh "${VM_IP}"
       - name: run e2e
         run: |
-          WORKSPACE="${{ github.workspace }}"
-          colima ssh -- bash -c "
-            set -euo pipefail
-            export PATH=/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:\$PATH
-            export GOPATH=\$HOME/go
-            export ARTIFACTS_PATH='${WORKSPACE}/karmada-e2e-logs/${{ matrix.k8s }}/'
-            cd '${WORKSPACE}'
-            hack/run-e2e.sh
-          "
+          # Runs directly on macOS host. kubectl and the Go test binary connect
+          # to clusters at https://VM_IP:PORT via the vmnet interface — no SSH hop.
+          export PATH=/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$PATH
+          export GOPATH=$HOME/go
+          export ARTIFACTS_PATH=${{ github.workspace }}/karmada-e2e-logs/${{ matrix.k8s }}/
+          hack/run-e2e.sh
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -314,9 +339,14 @@ jobs:
       - name: collect kind logs from VM
         if: always()
         run: |
-          # Lima's /tmp inside the VM is not automatically mirrored back to macOS,
-          # so we pull the kind logs out via SSH before the upload step.
+          # kind containers live inside the colima VM's Docker. 'kind export logs'
+          # with DOCKER_HOST set talks to the VM daemon and writes logs locally.
+          # Colima ssh fallback covers any logs written to /tmp/karmada in the VM.
           mkdir -p /tmp/karmada
+          export PATH=/usr/local/go/bin:/usr/local/bin:$PATH
+          for cluster in karmada-host member1 member2 member3; do
+            kind export logs /tmp/karmada --name "${cluster}" 2>/dev/null || true
+          done
           colima ssh -- bash -c "tar -C /tmp -czf - karmada 2>/dev/null || true" \
             | tar -C /tmp -xzf - 2>/dev/null || true
       - name: upload kind logs
