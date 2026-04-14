@@ -230,13 +230,6 @@ jobs:
           curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
             -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
           echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
-          # Download cloudflared Linux/amd64 NOW, before colima starts.
-          # colima's VZ --network-address adds bridge100 to macOS, which causes
-          # mDNSResponder to prefer the vmnet's broken DNS for host-side lookups.
-          # Downloading after colima start fails with curl: (6) Could not resolve host.
-          curl -fsSL -o /tmp/cloudflared \
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
-          echo "cloudflared Linux/amd64 downloaded to /tmp/cloudflared ($(wc -c < /tmp/cloudflared) bytes)"
           # --vm-type vz: Apple Virtualization Framework (VZ) is the only hypervisor
           # available on macOS-26 runners — QEMU is not installed (qemu-img not found).
           # VZ on Intel Mac exposes the native physical CPU, so Go 1.25's pre-compiled
@@ -277,39 +270,17 @@ jobs:
           #   • Host vmnet IP (192.168.64.1:53): mDNSResponder is bound to 0.0.0.0:53
           #     but only responds to localhost — ignores queries from VM (timeout).
           #
-          # Fix: DNS-over-TLS (DoT) via systemd-resolved, configured via a Lima
-          #   provision script written to ~/.lima/_config/override.yaml BEFORE colima
-          #   start. Lima merges this into cloud-init; it runs inside the VM during
-          #   initialisation (before docker build is ever called). DoT uses port 853
-          #   which is NOT blocked by Azure. The VM reaches 1.1.1.1:853 via Lima's
-          #   usernet NAT (the same path docker pull uses for HTTPS on port 443).
-          #   /etc/resolv.conf stays as its Ubuntu symlink (→ 127.0.0.53 stub), so
-          #   both Docker daemon and BuildKit query systemd-resolved, which now
-          #   forwards upstream via DoT. No colima ssh needed.
+          # Fix: Python DNS-over-HTTPS proxy (applied after colima starts via colima ssh).
+          #   Python3 is pre-installed in Ubuntu — no binary downloads required.
+          #   A UDP stub on 127.0.0.1:53 base64url-encodes each DNS query and forwards
+          #   it to https://1.1.1.1/dns-query (port 443). Outbound TCP 443 is NOT
+          #   blocked by Azure — same path docker pull uses for image layers.
+          #   /etc/resolv.conf is set to 127.0.0.1; daemon.json also points there so
+          #   both Docker daemon and BuildKit resolve via the proxy.
           #
           # --cpu 4 --memory 6: leave headroom for 'go build' which cross-compiles
           # karmada binaries on the macOS host AFTER colima starts. With 6 CPUs/12GB
           # the host was OOM-starved and go build was SIGKILL'd after ~2m44s.
-          #
-          # DNS-over-HTTPS via cloudflared (applied after colima starts via colima ssh).
-          # All standard port-53 DNS paths fail on GitHub macOS-26 (Azure) runners:
-          #   • Lima usernet DNS proxy (192.168.5.1:53): Lima tries to bind 0.0.0.0:53
-          #     on the host to intercept VM DNS, but mDNSResponder already holds that
-          #     port → Lima proxy fails.
-          #   • External IPs (8.8.8.8, 1.1.1.1) on port 53: outbound UDP/TCP port 53
-          #     to external IPs is blocked by Azure's datacenter firewall.
-          #   • Host vmnet IP (192.168.64.1:53): mDNSResponder is bound to 0.0.0.0:53
-          #     but only serves localhost — ignores queries arriving from the VM.
-          # Solution: cloudflared (Cloudflare's DNS proxy binary) resolves DNS via
-          #   HTTPS (DoH, port 443). Outbound TCP 443 is NOT blocked — the same
-          #   path docker pull uses for pulling images. We run cloudflared inside the
-          #   VM as a daemon on 127.0.0.1:53, point /etc/resolv.conf there, and
-          #   also write daemon.json so Docker daemon uses the same resolver.
-          #   Both Docker daemon and BuildKit (which reads /etc/resolv.conf directly)
-          #   then resolve via cloudflared → Cloudflare DoH → internet.
-          # Note: colima LIMA_HOME is ~/.colima/ (not ~/.lima/), so Lima provision
-          #   scripts require ~/.colima/_config/override.yaml. Using colima ssh is
-          #   simpler and reliable here.
           colima start --cpu 4 --memory 6 --vm-type vz --network-address --verbose
           echo "colima status after start:"
           colima status
@@ -321,32 +292,51 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
-          # Fix VM DNS using cloudflared DoH proxy (port 443, not blocked by Azure).
-          # cloudflared was downloaded before colima start (host DNS is broken after
-          # colima's VZ --network-address adds bridge100, which skews mDNSResponder).
-          echo "Copying cloudflared binary to VM via colima ssh stdin..."
-          cat /tmp/cloudflared | colima ssh -- \
-            sudo bash -c 'cat > /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared'
-          echo "Configuring cloudflared DoH proxy in VM..."
+          # Fix VM DNS using a Python DNS-over-HTTPS proxy (no downloads required).
+          # Python3 is pre-installed in the Ubuntu VM image.
+          # All standard port-53 DNS paths fail on GitHub macOS-26 (Azure) runners:
+          #   • Lima usernet DNS proxy (192.168.5.1:53): Lima tries to bind 0.0.0.0:53
+          #     on the host; mDNSResponder already holds that port → Lima proxy fails.
+          #   • External IPs (8.8.8.8, 1.1.1.1) on port 53: outbound UDP/TCP port 53
+          #     to external IPs is blocked by Azure's datacenter firewall.
+          #   • Host vmnet IP (192.168.64.1:53): mDNSResponder only serves localhost —
+          #     ignores queries arriving from the VM (timeout).
+          # Solution: Python UDP stub on 127.0.0.1:53 encodes each DNS query in
+          #   base64url and forwards to https://1.1.1.1/dns-query (DoH, port 443).
+          #   Outbound TCP 443 is NOT blocked — same path docker pull uses.
+          echo "Installing Python DoH proxy in VM..."
           DNS_SCRIPT=$(mktemp)
+          # Write the DNS_SCRIPT without any heredocs — bash -s reads from stdin
+          # (the temp file), and nested heredocs in that script can steal from the same
+          # stdin. Writing Python line-by-line with printf/echo avoids that conflict.
           printf '%s\n' \
             '#!/bin/bash' \
             'set -e' \
-            '# Stop systemd-resolved (was using broken 192.168.5.1 upstream)' \
             'systemctl stop systemd-resolved 2>/dev/null || true' \
-            '# Start cloudflared as DoH proxy on 127.0.0.1:53 (port 443 outbound, not blocked)' \
-            'nohup /usr/local/bin/cloudflared proxy-dns \' \
-            '  --port 53 --address 127.0.0.1 \' \
-            '  --upstream https://1.1.1.1/dns-query \' \
-            '  --upstream https://1.0.0.1/dns-query \' \
-            '  >/var/log/cloudflared.log 2>&1 &' \
-            'sleep 3' \
+            '# Write Python DoH proxy to /tmp/doh.py line by line' \
+            'rm -f /tmp/doh.py' \
+            'echo "import socket,threading,urllib.request as u,base64" >> /tmp/doh.py' \
+            'echo "def h(d,a,s):" >> /tmp/doh.py' \
+            'echo "    b=base64.urlsafe_b64encode(d).rstrip(b\"=\").decode()" >> /tmp/doh.py' \
+            'echo "    try:" >> /tmp/doh.py' \
+            'echo "        r=u.Request(\"https://1.1.1.1/dns-query?dns=\"+b,headers={\"Accept\":\"application/dns-message\"})" >> /tmp/doh.py' \
+            'echo "        with u.urlopen(r,timeout=10) as x: s.sendto(x.read(),a)" >> /tmp/doh.py' \
+            'echo "    except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
+            'echo "k=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)" >> /tmp/doh.py' \
+            'echo "k.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)" >> /tmp/doh.py' \
+            'echo "k.bind((\"127.0.0.1\",53))" >> /tmp/doh.py' \
+            'echo "print(\"DoH proxy on 127.0.0.1:53\",flush=True)" >> /tmp/doh.py' \
+            'echo "while True:" >> /tmp/doh.py' \
+            'echo "    d,a=k.recvfrom(512)" >> /tmp/doh.py' \
+            'echo "    threading.Thread(target=h,args=(d,a,k),daemon=True).start()" >> /tmp/doh.py' \
+            'nohup python3 /tmp/doh.py >/var/log/doh-proxy.log 2>&1 &' \
+            'sleep 2' \
             'rm -f /etc/resolv.conf' \
             'printf "nameserver 127.0.0.1\n" > /etc/resolv.conf' \
             'mkdir -p /etc/docker' \
             'printf "{\"dns\":[\"127.0.0.1\"]}\n" > /etc/docker/daemon.json' \
-            'nslookup registry-1.docker.io && echo "cloudflared DNS OK" \' \
-            '  || { echo "cloudflared DNS FAILED"; cat /var/log/cloudflared.log; exit 1; }' \
+            'getent hosts registry-1.docker.io && echo "DoH DNS OK" \' \
+            '  || { echo "DoH DNS FAILED"; cat /var/log/doh-proxy.log; exit 1; }' \
             'systemctl restart docker' \
             > "$DNS_SCRIPT"
           colima ssh -- sudo bash -s < "$DNS_SCRIPT"
@@ -356,7 +346,7 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
-          echo "cloudflared DoH DNS fix applied."
+          echo "Python DoH DNS fix applied."
           # Extract the VM's vmnet IP assigned by --network-address.
           # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
           # it entirely when empty (omitempty). Parsing the text table is more reliable.
