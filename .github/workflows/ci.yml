@@ -219,7 +219,10 @@ jobs:
           # (nested virtualisation). 'Haswell' is a concrete CPU model that QEMU
           # can configure reliably in nested environments and provides the needed
           # instruction set extensions.
-          colima start --cpu 6 --memory 12 --cpu-type Haswell
+          # --verbose surfaces colima/lima/QEMU logs so hangs are diagnosable in CI.
+          colima start --cpu 6 --memory 12 --cpu-type Haswell --verbose
+          echo "colima status after start:"
+          colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
           # Avoid GNU coreutils 'timeout' which is not available on macOS runners.
           echo "Waiting for Docker daemon to be ready..."
