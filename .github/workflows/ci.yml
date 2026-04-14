@@ -395,15 +395,6 @@ jobs:
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
           echo "Python DoH DNS fix applied."
-          # Pre-pull alpine:3.23.3 NOW while DNS is confirmed working.
-          # All karmada Dockerfiles start with FROM alpine:3.23.3.  Without a local
-          # cache, docker build must resolve auth.docker.io at build time.  By the time
-          # 'make images' runs (after 6+ min of go build), the Python DoH proxy may be
-          # under load from concurrent kind cluster pulls — pre-caching alpine avoids
-          # that race entirely.
-          echo "Pre-pulling alpine:3.23.3 base image..."
-          docker pull alpine:3.23.3
-          echo "Alpine base image cached."
           # Propagate to all subsequent steps via GITHUB_ENV.
           # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
           echo "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock" >> $GITHUB_ENV
