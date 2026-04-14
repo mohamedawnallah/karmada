@@ -263,16 +263,23 @@ jobs:
             cd '${WORKSPACE}'
             hack/local-up-karmada.sh
           "
-      - name: verify control plane
+      - name: run e2e
         run: |
           WORKSPACE="${{ github.workspace }}"
           colima ssh -- bash -c "
             set -euo pipefail
-            export PATH=/usr/local/bin:\$PATH
-            export KUBECONFIG=\$HOME/.kube/karmada.config
-            kubectl --context karmada-apiserver get pods -A
-            kubectl --context karmada-host get pods -A
+            export PATH=/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:\$PATH
+            export GOPATH=\$HOME/go
+            export ARTIFACTS_PATH='${WORKSPACE}/karmada-e2e-logs/${{ matrix.k8s }}/'
+            cd '${WORKSPACE}'
+            hack/run-e2e.sh
           "
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: karmada_macos_e2e_log_${{ matrix.k8s }}
+          path: ${{ github.workspace }}/karmada-e2e-logs/${{ matrix.k8s }}/
       - name: collect kind logs from VM
         if: always()
         run: |
