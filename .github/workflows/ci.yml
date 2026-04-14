@@ -191,6 +191,25 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - name: install Go, kind, and kubectl (macOS host)
+        run: |
+          # Installed BEFORE colima start intentionally: colima's VZ --network-address
+          # mode attempts to bind port 53 on the host during startup, which can
+          # temporarily disrupt DNS. Installing tools here guarantees clean DNS.
+          #
+          # Download to temp files first (not piped) so curl DNS/HTTP failures are
+          # caught immediately rather than silently producing an empty tar extraction.
+          curl -fsSL -o /tmp/go.tar.gz \
+            "https://go.dev/dl/go${GO_VERSION}.darwin-amd64.tar.gz"
+          sudo tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
+          sudo curl -fsSL \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-darwin-amd64" \
+            -o /usr/local/bin/kind && sudo chmod +x /usr/local/bin/kind
+          sudo curl -fsSL \
+            "https://dl.k8s.io/release/${{ matrix.k8s }}/bin/darwin/amd64/kubectl" \
+            -o /usr/local/bin/kubectl && sudo chmod +x /usr/local/bin/kubectl
+          export PATH=/usr/local/go/bin:$PATH
+          echo "Installed on macOS host: go=$(go version) | kind=$(kind version) | kubectl=$(kubectl version --client)"
       - name: install and start colima (docker) with network address
         run: |
           # Install pinned versions directly from GitHub/Docker releases to avoid
@@ -253,8 +272,8 @@ jobs:
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
           # Extract the VM's vmnet IP assigned by --network-address.
-          # 'colima list -o json' does NOT populate the ip_address field (omitempty bug);
-          # parse the text table instead: last column of the data row is the ADDRESS.
+          # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
+          # it entirely when empty (omitempty). Parsing the text table is more reliable.
           VM_IP=$(colima list 2>/dev/null | awk 'NR==2 && NF>=8 {print $NF}')
           if [[ -z "${VM_IP}" ]]; then
             echo "ERROR: --network-address did not produce a routable VM IP."
@@ -273,27 +292,6 @@ jobs:
           # MAC_NIC_IPADDRESS: honoured by util::get_macos_ipaddress (early-return path)
           #   so the Karmada API server binds to VM_IP:5443 (reachable from macOS + VM).
           echo "MAC_NIC_IPADDRESS=${VM_IP}" >> $GITHUB_ENV
-      - name: install Go, kind, and kubectl (macOS host)
-        run: |
-          # Tools run on the macOS host. Docker commands are forwarded to the colima VM
-          # daemon via DOCKER_HOST. Binaries that execute on the host (go, kind, kubectl,
-          # karmadactl) must be darwin/amd64 builds.
-          #
-          # go install (in setup-dev-base.sh step 2) compiles karmadactl as a darwin
-          # binary automatically because GOOS defaults to 'darwin' on the macOS host.
-          # make images sends docker build contexts to the VM's Docker daemon via
-          # DOCKER_HOST — compilation inside the image happens on Linux, unaffected
-          # by the host GOOS.
-          curl -fsSL "https://go.dev/dl/go${GO_VERSION}.darwin-amd64.tar.gz" \
-            | sudo tar -C /usr/local -xz
-          sudo curl -fsSL \
-            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-darwin-amd64" \
-            -o /usr/local/bin/kind && chmod +x /usr/local/bin/kind
-          sudo curl -fsSL \
-            "https://dl.k8s.io/release/${{ matrix.k8s }}/bin/darwin/amd64/kubectl" \
-            -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
-          export PATH=/usr/local/go/bin:$PATH
-          echo "Installed on macOS host: go=$(go version) | kind=$(kind version) | kubectl=$(kubectl version --client)"
       - name: setup e2e test environment
         run: |
           # Runs directly on macOS host — no colima ssh wrapper.
