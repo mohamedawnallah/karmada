@@ -260,24 +260,55 @@ jobs:
           # time and completes successfully. This is expected behaviour.
           #
           # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
-          # DNS for Docker containers inside the VM fails via two routes:
-          #   1. Lima's usernet DNS (192.168.5.1:53): Lima's DNS proxy requires
-          #      binding 0.0.0.0:53 on the host — but the host already has a DNS
-          #      service there → Lima can't bind → usernet DNS unresponsive → i/o timeout.
-          #   2. External DNS (8.8.8.8 etc.): blocked by the runner's Azure datacenter
-          #      network (outbound UDP/TCP port 53 to external IPs is restricted).
-          # Fix: use the HOST's own DNS resolver via the vmnet interface.
-          #   The host always gets 192.168.64.1 on the vmnet (colima assigns the VM
-          #   192.168.64.2 in the 192.168.64.0/24 subnet). Since the host has 0.0.0.0:53
-          #   bound, it is reachable at 192.168.64.1:53 from the VM.
-          #   NOTE: --dns here sets Lima's usernet DHCP nameserver, but Docker daemon
-          #   starts during VM boot before this takes effect. The actual Docker DNS fix
-          #   is applied via daemon.json after colima starts (see below).
+          #
+          # DNS situation on GitHub macOS-26 (Azure-hosted) runners:
+          #   • Lima's usernet DNS proxy (192.168.5.1:53): needs to bind 0.0.0.0:53 on
+          #     the host — host already has mDNSResponder there → Lima can't bind →
+          #     usernet DNS broken.
+          #   • Direct external DNS (8.8.8.8:53, 1.1.1.1:53): outbound UDP/TCP port 53
+          #     to external IPs is blocked by the Azure datacenter firewall.
+          #   • Host vmnet IP (192.168.64.1:53): mDNSResponder is bound to 0.0.0.0:53
+          #     but only responds to localhost — ignores queries from VM (timeout).
+          #
+          # Fix: DNS-over-TLS (DoT) via systemd-resolved, configured via a Lima
+          #   provision script written to ~/.lima/_config/override.yaml BEFORE colima
+          #   start. Lima merges this into cloud-init; it runs inside the VM during
+          #   initialisation (before docker build is ever called). DoT uses port 853
+          #   which is NOT blocked by Azure. The VM reaches 1.1.1.1:853 via Lima's
+          #   usernet NAT (the same path docker pull uses for HTTPS on port 443).
+          #   /etc/resolv.conf stays as its Ubuntu symlink (→ 127.0.0.53 stub), so
+          #   both Docker daemon and BuildKit query systemd-resolved, which now
+          #   forwards upstream via DoT. No colima ssh needed.
           #
           # --cpu 4 --memory 6: leave headroom for 'go build' which cross-compiles
           # karmada binaries on the macOS host AFTER colima starts. With 6 CPUs/12GB
           # the host was OOM-starved and go build was SIGKILL'd after ~2m44s.
-          colima start --cpu 4 --memory 6 --vm-type vz --network-address --dns 192.168.64.1 --verbose
+          #
+          # Write Lima global override before colima start so the provision script
+          # is baked into the VM's cloud-init user-data at first boot.
+          mkdir -p "${HOME}/.lima/_config"
+          cat > "${HOME}/.lima/_config/override.yaml" << 'LIMAEOF'
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -e
+      # Configure systemd-resolved to use DNS-over-TLS (port 853).
+      # Port 853 is not blocked by the Azure datacenter firewall (unlike port 53).
+      # The VM reaches 1.1.1.1:853 via Lima's usernet NAT, the same path used
+      # for all outbound HTTPS traffic from inside the VM.
+      mkdir -p /etc/systemd/resolved.conf.d
+      cat > /etc/systemd/resolved.conf.d/dot.conf << 'EOF'
+[Resolve]
+DNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com
+DNSSEC=no
+DNSOverTLS=yes
+EOF
+      systemctl restart systemd-resolved
+      # Verify resolution works before Docker uses it.
+      resolvectl query registry-1.docker.io 2>/dev/null && echo "DoT DNS OK" || echo "DoT DNS query failed (non-fatal, Docker build will retry)"
+LIMAEOF
+          colima start --cpu 4 --memory 6 --vm-type vz --network-address --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
@@ -288,29 +319,6 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
-          # Fix VM DNS for Docker daemon AND BuildKit.
-          # Problem: Lima's usernet assigns 192.168.5.1:53 as the VM's DNS, but
-          # Lima's DNS proxy can't bind 0.0.0.0:53 on the host (already in use) →
-          # 192.168.5.1:53 is unresponsive. External IPs (8.8.8.8) blocked by Azure.
-          #
-          # Why daemon.json alone is insufficient:
-          #   'docker build' uses BuildKit (buildkitd), which resolves DNS using the
-          #   VM's /etc/resolv.conf directly (host network namespace), NOT Docker's
-          #   embedded DNS or daemon.json "dns" entries. On Ubuntu (Lima's base image),
-          #   /etc/resolv.conf is a symlink → systemd-resolved stub (127.0.0.53) →
-          #   forwards to 192.168.5.1 → timeout.
-          #
-          # Fix: replace /etc/resolv.conf symlink with a real file pointing to
-          #   192.168.64.1 (host's vmnet IP; host DNS is reachable there). Also write
-          #   daemon.json for Docker daemon's own resolver. Restart Docker to pick up.
-          echo "Fixing VM DNS (resolv.conf + daemon.json) to use host vmnet IP 192.168.64.1..."
-          colima ssh -- sudo bash -c 'rm -f /etc/resolv.conf && printf "nameserver 192.168.64.1\n" > /etc/resolv.conf && mkdir -p /etc/docker && printf "{\"dns\":[\"192.168.64.1\"]}\n" > /etc/docker/daemon.json && systemctl restart docker'
-          for i in $(seq 1 30); do
-            docker info &>/dev/null && break
-            sleep 2
-          done
-          docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after DNS fix restart"; exit 1; }
-          echo "VM DNS fix applied (resolv.conf and daemon.json → 192.168.64.1)."
           # Extract the VM's vmnet IP assigned by --network-address.
           # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
           # it entirely when empty (omitempty). Parsing the text table is more reliable.
