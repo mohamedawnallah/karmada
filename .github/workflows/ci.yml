@@ -218,6 +218,17 @@ jobs:
           # 'signal: illegal instruction'. No --cpu-type needed: that flag is
           # QEMU-specific; passing it to VZ corrupted Lima's VZ network/SSH config
           # and caused the VM to hang after reaching 'running' state.
+          #
+          # Note: colima 0.10.1 with VZ performs two VM starts in sequence (~4min
+          # overhead, not wasted compute). The first start boots the VM and gets SSH
+          # up, but colima's internal Docker-daemon readiness timer (~29s) fires before
+          # the Docker daemon responds inside the freshly booted VZ VM. Colima then
+          # sends SIGINT to the hostagent, reuses the already-initialised disk
+          # ("Using the existing instance"), and boots a second time — Docker starts
+          # faster on the warm disk and the second start completes successfully. There
+          # is no colima CLI flag to extend this internal timeout; the behaviour is
+          # normal and the net result is one running VM with Docker ready.
+          #
           # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
           colima start --cpu 6 --memory 12 --vm-type vz --verbose
           echo "colima status after start:"
