@@ -198,7 +198,7 @@ jobs:
           #
           # lima: colima is a wrapper around Lima — limactl must be on PATH before colima start
           curl -fsSL "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-x86_64.tar.gz" \
-            | tar -xz --strip=1 -C /usr/local
+            | sudo tar -xz --strip=1 -C /usr/local
           # colima: runs a Linux VM via Hypervisor.framework so Docker containers work on macOS
           curl -fsSL "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-x86_64" \
             -o /usr/local/bin/colima && chmod +x /usr/local/bin/colima
