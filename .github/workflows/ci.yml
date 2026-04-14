@@ -336,15 +336,23 @@ jobs:
             '#   - retry loop (3 attempts): covers transient SSL / TCP resets.' \
             '#   - recvfrom(4096): handles EDNS0 extended-size queries (>512 bytes).' \
             'rm -f /tmp/doh.py' \
-            'echo "import socket,threading,urllib.request as u,base64,ssl" >> /tmp/doh.py' \
+            'echo "import socket,threading,urllib.request as u,base64,ssl,time" >> /tmp/doh.py' \
             'echo "ctx=ssl.create_default_context()" >> /tmp/doh.py' \
+            'echo "_cache={}" >> /tmp/doh.py' \
+            'echo "_cL=threading.Lock()" >> /tmp/doh.py' \
             'echo "def h(d,a,s):" >> /tmp/doh.py' \
+            'echo "    ck=d[12:];tid=d[:2];t=time.time()" >> /tmp/doh.py' \
+            'echo "    with _cL:" >> /tmp/doh.py' \
+            'echo "        if ck in _cache and _cache[ck][1]>t:" >> /tmp/doh.py' \
+            'echo "            s.sendto(tid+_cache[ck][0][2:],a); return" >> /tmp/doh.py' \
             'echo "    b=base64.urlsafe_b64encode(d).rstrip(b\"=\").decode()" >> /tmp/doh.py' \
             'echo "    for _ in range(3):" >> /tmp/doh.py' \
             'echo "        try:" >> /tmp/doh.py' \
-            'echo "            r=u.Request(\"https://1.1.1.1/dns-query?dns=\"+b,headers={\"Accept\":\"application/dns-message\"})" >> /tmp/doh.py' \
-            'echo "            with u.urlopen(r,context=ctx,timeout=4) as x:" >> /tmp/doh.py' \
-            'echo "                s.sendto(x.read(),a); return" >> /tmp/doh.py' \
+            'echo "            rq=u.Request(\"https://1.1.1.1/dns-query?dns=\"+b,headers={\"Accept\":\"application/dns-message\"})" >> /tmp/doh.py' \
+            'echo "            with u.urlopen(rq,context=ctx,timeout=4) as x:" >> /tmp/doh.py' \
+            'echo "                rr=x.read()" >> /tmp/doh.py' \
+            'echo "            with _cL: _cache[ck]=(rr,t+600)" >> /tmp/doh.py' \
+            'echo "            s.sendto(rr,a); return" >> /tmp/doh.py' \
             'echo "        except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
             'echo "def listen(k):" >> /tmp/doh.py' \
             'echo "    while True:" >> /tmp/doh.py' \
@@ -367,6 +375,13 @@ jobs:
             "printf '{\"dns\":[\"${VM_IP}\"]}\n' > /etc/docker/daemon.json" \
             'getent hosts registry-1.docker.io && echo "DoH DNS OK" \' \
             '  || { echo "DoH DNS FAILED"; cat /var/log/doh-proxy.log; exit 1; }' \
+            '# Pre-warm DNS cache (600s TTL) for domains used in docker build.' \
+            '# getent queries go via k1 (127.0.0.1:53). The cache is shared between' \
+            '# k1 and k2 in the same Python process, so Docker embedded DNS queries' \
+            '# via k2 (VM_IP:53) get instant cache hits even 5-10 min later.' \
+            'getent hosts dl-cdn.alpinelinux.org || true' \
+            'getent hosts auth.docker.io || true' \
+            'echo "DNS pre-warm complete."' \
             'echo "daemon.json content:"; cat /etc/docker/daemon.json' \
             'echo "Port 53 listeners before restart:"; ss -ulnp | grep ":53 " || true' \
             'timeout 120 systemctl restart docker \' \
