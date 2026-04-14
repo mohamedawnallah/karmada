@@ -313,24 +313,34 @@ jobs:
             '#!/bin/bash' \
             'set -e' \
             'systemctl stop systemd-resolved 2>/dev/null || true' \
-            '# Write Python DoH proxy to /tmp/doh.py line by line' \
+            '# Write Python DoH proxy to /tmp/doh.py line by line.' \
+            '# Key improvements over a naive proxy:' \
+            '#   - ssl.create_default_context() built once, reused by all threads' \
+            '#     (avoids per-request CA-bundle load and saves ~200ms per query).' \
+            '#   - timeout=4s: Go'\''s DNS client times out after ~5s; 4s gives python' \
+            '#     time to respond before Go retries or abandons the query.' \
+            '#   - retry loop (3 attempts): covers transient SSL / TCP resets.' \
+            '#   - recvfrom(4096): handles EDNS0 extended-size queries (>512 bytes).' \
             'rm -f /tmp/doh.py' \
-            'echo "import socket,threading,urllib.request as u,base64" >> /tmp/doh.py' \
+            'echo "import socket,threading,urllib.request as u,base64,ssl" >> /tmp/doh.py' \
+            'echo "ctx=ssl.create_default_context()" >> /tmp/doh.py' \
             'echo "def h(d,a,s):" >> /tmp/doh.py' \
             'echo "    b=base64.urlsafe_b64encode(d).rstrip(b\"=\").decode()" >> /tmp/doh.py' \
-            'echo "    try:" >> /tmp/doh.py' \
-            'echo "        r=u.Request(\"https://1.1.1.1/dns-query?dns=\"+b,headers={\"Accept\":\"application/dns-message\"})" >> /tmp/doh.py' \
-            'echo "        with u.urlopen(r,timeout=10) as x: s.sendto(x.read(),a)" >> /tmp/doh.py' \
-            'echo "    except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
+            'echo "    for _ in range(3):" >> /tmp/doh.py' \
+            'echo "        try:" >> /tmp/doh.py' \
+            'echo "            r=u.Request(\"https://1.1.1.1/dns-query?dns=\"+b,headers={\"Accept\":\"application/dns-message\"})" >> /tmp/doh.py' \
+            'echo "            with u.urlopen(r,context=ctx,timeout=4) as x:" >> /tmp/doh.py' \
+            'echo "                s.sendto(x.read(),a); return" >> /tmp/doh.py' \
+            'echo "        except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
             'echo "k=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)" >> /tmp/doh.py' \
             'echo "k.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)" >> /tmp/doh.py' \
             'echo "k.bind((\"127.0.0.1\",53))" >> /tmp/doh.py' \
             'echo "print(\"DoH proxy on 127.0.0.1:53\",flush=True)" >> /tmp/doh.py' \
             'echo "while True:" >> /tmp/doh.py' \
-            'echo "    d,a=k.recvfrom(512)" >> /tmp/doh.py' \
+            'echo "    d,a=k.recvfrom(4096)" >> /tmp/doh.py' \
             'echo "    threading.Thread(target=h,args=(d,a,k),daemon=True).start()" >> /tmp/doh.py' \
             'nohup python3 /tmp/doh.py >/var/log/doh-proxy.log 2>&1 &' \
-            'sleep 2' \
+            'sleep 3' \
             'rm -f /etc/resolv.conf' \
             'printf "nameserver 127.0.0.1\n" > /etc/resolv.conf' \
             'mkdir -p /etc/docker' \
@@ -347,6 +357,15 @@ jobs:
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
           echo "Python DoH DNS fix applied."
+          # Pre-pull alpine:3.23.3 NOW while DNS is confirmed working.
+          # All karmada Dockerfiles start with FROM alpine:3.23.3.  Without a local
+          # cache, docker build must resolve auth.docker.io at build time.  By the time
+          # 'make images' runs (after 6+ min of go build), the Python DoH proxy may be
+          # under load from concurrent kind cluster pulls — pre-caching alpine avoids
+          # that race entirely.
+          echo "Pre-pulling alpine:3.23.3 base image..."
+          docker pull alpine:3.23.3
+          echo "Alpine base image cached."
           # Extract the VM's vmnet IP assigned by --network-address.
           # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
           # it entirely when empty (omitempty). Parsing the text table is more reliable.
