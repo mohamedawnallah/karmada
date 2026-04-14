@@ -375,13 +375,15 @@ jobs:
             "printf '{\"dns\":[\"${VM_IP}\"]}\n' > /etc/docker/daemon.json" \
             'getent hosts registry-1.docker.io && echo "DoH DNS OK" \' \
             '  || { echo "DoH DNS FAILED"; cat /var/log/doh-proxy.log; exit 1; }' \
-            '# Pre-warm DNS cache (600s TTL) for domains used in docker build.' \
-            '# getent queries go via k1 (127.0.0.1:53). The cache is shared between' \
-            '# k1 and k2 in the same Python process, so Docker embedded DNS queries' \
-            '# via k2 (VM_IP:53) get instant cache hits even 5-10 min later.' \
-            'getent hosts dl-cdn.alpinelinux.org || true' \
-            'getent hosts auth.docker.io || true' \
-            'echo "DNS pre-warm complete."' \
+            '# Pre-warm DNS A-records (IPv4) via getent ahostsv4 — forces AF_INET queries.' \
+            '# getent hosts sends AAAA (IPv6-preferred on Ubuntu), caching the wrong type.' \
+            '# Docker containers use A queries (no IPv6 by default); ahostsv4 ensures' \
+            '# the shared k1/k2 cache is populated with A records before docker build.' \
+            'getent ahostsv4 dl-cdn.alpinelinux.org || true' \
+            'getent ahostsv4 auth.docker.io || true' \
+            'getent ahostsv4 registry-1.docker.io || true' \
+            'getent ahostsv4 registry.k8s.io || true' \
+            'echo "DNS A-record pre-warm complete."' \
             'echo "daemon.json content:"; cat /etc/docker/daemon.json' \
             'echo "Port 53 listeners before restart:"; ss -ulnp | grep ":53 " || true' \
             'timeout 120 systemctl restart docker \' \
@@ -396,23 +398,31 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
-          # Pre-warm k2 (Docker embedded DNS upstream) with A records from macOS host.
-          # 'getent hosts' inside the VM sends AAAA queries (IPv6 preferred in Ubuntu),
-          # but Docker containers send A queries (IPv4). Without A-record cache entries,
-          # k2 gets a cache miss and must make a fresh DoH request during docker build —
-          # racing with kind image pulls that also hammer k2 simultaneously.
-          # 'dig @VM_IP A domain' sends an A query directly to k2 from the macOS host,
-          # populating the cache with the correct record type before docker build starts.
-          echo "Pre-warming k2 with A-record queries from macOS host..."
-          for domain in auth.docker.io registry-1.docker.io dl-cdn.alpinelinux.org registry.k8s.io; do
-            result=$(dig @"${VM_IP}" A "${domain}" +short +timeout=10 +tries=3 2>&1 | head -1)
-            if [[ -n "${result}" ]]; then
-              echo "k2 A-prewarm ${domain}: ${result}"
-            else
-              echo "WARNING: k2 A-prewarm FAILED for ${domain} — DNS may be unreliable for containers"
-            fi
-          done
-          echo "k2 A-record pre-warm complete."
+          # Build alpine:3.23.3 locally from Alpine Linux CDN rootfs to bypass Docker Hub.
+          # registry-1.docker.io (Docker Hub registry, hosted on AWS) returns
+          # "connection refused" from the colima VM on Azure macOS runners — Azure likely
+          # blocks or interferes with those specific AWS IP ranges outbound. Alpine Linux's
+          # CDN (dl-cdn.alpinelinux.org via Fastly) is not affected.
+          # 'FROM scratch' + ADD in docker build requires NO network access; the curl
+          # downloads the rootfs from Alpine CDN and the build is entirely local.
+          echo "Building alpine:3.23.3 from Alpine Linux CDN (bypasses Docker Hub)..."
+          ALPINE_SCRIPT=$(mktemp)
+          printf '%s\n' \
+            '#!/bin/bash' \
+            'set -e' \
+            'curl -fsSL --retry 3 --retry-delay 2 \' \
+            '  "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \' \
+            '  -o /tmp/alpine-rootfs.tar.gz' \
+            'mkdir -p /tmp/alpine-build' \
+            'mv /tmp/alpine-rootfs.tar.gz /tmp/alpine-build/' \
+            'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
+            'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3 /tmp/alpine-build/' \
+            'rm -rf /tmp/alpine-build' \
+            'echo "alpine:3.23.3 loaded from CDN"' \
+            'docker images alpine:3.23.3' \
+            > "$ALPINE_SCRIPT"
+          colima ssh -- sudo bash -s < "$ALPINE_SCRIPT"
+          rm -f "$ALPINE_SCRIPT"
           echo "Python DoH DNS fix applied."
           # Propagate to all subsequent steps via GITHUB_ENV.
           # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
