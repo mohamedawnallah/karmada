@@ -402,22 +402,29 @@ jobs:
           # registry-1.docker.io (Docker Hub registry, hosted on AWS) returns
           # "connection refused" from the colima VM on Azure macOS runners — Azure likely
           # blocks or interferes with those specific AWS IP ranges outbound. Alpine Linux's
-          # CDN (dl-cdn.alpinelinux.org via Fastly) is not affected.
-          # 'FROM scratch' + ADD in docker build requires NO network access; the curl
-          # downloads the rootfs from Alpine CDN and the build is entirely local.
-          echo "Building alpine:3.23.3 from Alpine Linux CDN (bypasses Docker Hub)..."
+          # CDN (dl-cdn.alpinelinux.org via Fastly) is accessible from the macOS host.
+          # Download on the macOS HOST (full internet access) and share into the VM via
+          # virtiofs — colima mounts ${HOME} at the same path inside the VM read-only,
+          # so the file is immediately visible without any network access from the VM.
+          # 'FROM scratch' + ADD in docker build requires NO network access inside the VM.
+          echo "Downloading Alpine rootfs on macOS host (virtiofs share)..."
+          ALPINE_ROOTFS="${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz"
+          curl -fsSL --max-time 120 --retry 3 --retry-delay 2 \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
+            -o "${ALPINE_ROOTFS}" \
+            || { echo "FATAL: cannot download Alpine rootfs on macOS host"; exit 1; }
+          echo "Alpine rootfs downloaded: $(ls -lh ${ALPINE_ROOTFS})"
+          echo "Building alpine:3.23.3 inside VM using virtiofs-shared rootfs..."
           ALPINE_SCRIPT=$(mktemp)
           printf '%s\n' \
             '#!/bin/bash' \
             'set -e' \
             'mkdir -p /tmp/alpine-build' \
-            'curl -fsSL --retry 3 --retry-delay 2 \' \
-            '  "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \' \
-            '  -o /tmp/alpine-build/alpine-minirootfs-3.23.3-x86_64.tar.gz' \
+            "cp \"${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz\" /tmp/alpine-build/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
             'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
             'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3 /tmp/alpine-build/' \
             'rm -rf /tmp/alpine-build' \
-            'echo "alpine:3.23.3 loaded from CDN"' \
+            'echo "alpine:3.23.3 created from host-downloaded rootfs"' \
             'docker images alpine:3.23.3' \
             > "$ALPINE_SCRIPT"
           colima ssh -- sudo bash -s < "$ALPINE_SCRIPT"
