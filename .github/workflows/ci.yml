@@ -292,6 +292,16 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
+          # Extract the VM's vmnet IP NOW (before DNS setup) so it is available
+          # for daemon.json — Docker's embedded DNS (127.0.0.11) rejects loopback
+          # upstreams, so we must point it at the non-loopback vmnet IP.
+          VM_IP=$(colima list 2>/dev/null | awk 'NR==2 && NF>=8 {print $NF}')
+          if [[ -z "${VM_IP}" ]]; then
+            echo "ERROR: --network-address did not produce a routable VM IP."
+            echo "colima list:"; colima list
+            exit 1
+          fi
+          echo "Colima VM vmnet IP: ${VM_IP}"
           # Fix VM DNS using a Python DNS-over-HTTPS proxy (no downloads required).
           # Python3 is pre-installed in the Ubuntu VM image.
           # All standard port-53 DNS paths fail on GitHub macOS-26 (Azure) runners:
@@ -334,8 +344,8 @@ jobs:
             'echo "        except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
             'echo "k=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)" >> /tmp/doh.py' \
             'echo "k.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)" >> /tmp/doh.py' \
-            'echo "k.bind((\"127.0.0.1\",53))" >> /tmp/doh.py' \
-            'echo "print(\"DoH proxy on 127.0.0.1:53\",flush=True)" >> /tmp/doh.py' \
+            'echo "k.bind((\"0.0.0.0\",53))" >> /tmp/doh.py' \
+            'echo "print(\"DoH proxy on 0.0.0.0:53\",flush=True)" >> /tmp/doh.py' \
             'echo "while True:" >> /tmp/doh.py' \
             'echo "    d,a=k.recvfrom(4096)" >> /tmp/doh.py' \
             'echo "    threading.Thread(target=h,args=(d,a,k),daemon=True).start()" >> /tmp/doh.py' \
@@ -344,7 +354,7 @@ jobs:
             'rm -f /etc/resolv.conf' \
             'printf "nameserver 127.0.0.1\n" > /etc/resolv.conf' \
             'mkdir -p /etc/docker' \
-            'printf "{\"dns\":[\"127.0.0.1\"]}\n" > /etc/docker/daemon.json' \
+            "printf '{\"dns\":[\"${VM_IP}\"]}\n' > /etc/docker/daemon.json" \
             'getent hosts registry-1.docker.io && echo "DoH DNS OK" \' \
             '  || { echo "DoH DNS FAILED"; cat /var/log/doh-proxy.log; exit 1; }' \
             'systemctl restart docker' \
@@ -366,16 +376,6 @@ jobs:
           echo "Pre-pulling alpine:3.23.3 base image..."
           docker pull alpine:3.23.3
           echo "Alpine base image cached."
-          # Extract the VM's vmnet IP assigned by --network-address.
-          # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
-          # it entirely when empty (omitempty). Parsing the text table is more reliable.
-          VM_IP=$(colima list 2>/dev/null | awk 'NR==2 && NF>=8 {print $NF}')
-          if [[ -z "${VM_IP}" ]]; then
-            echo "ERROR: --network-address did not produce a routable VM IP."
-            echo "colima list:"; colima list
-            exit 1
-          fi
-          echo "Colima VM vmnet IP: ${VM_IP}"
           # Propagate to all subsequent steps via GITHUB_ENV.
           # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
           echo "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock" >> $GITHUB_ENV
