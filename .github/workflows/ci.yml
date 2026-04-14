@@ -219,8 +219,14 @@ jobs:
           # (nested virtualisation). 'Haswell' is a concrete CPU model that QEMU
           # can configure reliably in nested environments and provides the needed
           # instruction set extensions.
+          # --vm-type qemu: colima 0.10.1 defaults to VZ (Apple Virtualization
+          # Framework) on macOS 26 runners, but --cpu-type Haswell is a QEMU-specific
+          # flag. When VZ is selected, the Haswell flag is ignored and the VM hangs
+          # after reaching "running" state because SSH init fails under VZ with an
+          # unexpected CPU config. Forcing QEMU ensures Haswell is properly applied
+          # as the QEMU -cpu model, giving Go 1.25 the SSE4.2+AVX it requires.
           # --verbose surfaces colima/lima/QEMU logs so hangs are diagnosable in CI.
-          colima start --cpu 6 --memory 12 --cpu-type Haswell --verbose
+          colima start --cpu 6 --memory 12 --vm-type qemu --cpu-type Haswell --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
