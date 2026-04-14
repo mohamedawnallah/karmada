@@ -178,101 +178,109 @@ jobs:
     # local-up path is being validated. Remove once proven stable.
     continue-on-error: true
     timeout-minutes: 90
+    env:
+      COLIMA_VERSION: "0.10.1"
+      DOCKER_VERSION: "29.4.0"
+      DOCKER_BUILDX_VERSION: "0.33.0"
+      # Go and kind versions are pinned to match go.mod / hack/util.sh
+      GO_VERSION: "1.25.7"
+      KIND_VERSION: "v0.31.0"
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - name: install Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
       - name: install and start colima (docker)
         run: |
+          # Install pinned versions directly from GitHub/Docker releases to avoid
+          # silent version drift from brew. Versions are pinned in the job env block.
+          #
           # colima: runs a Linux VM via Hypervisor.framework so Docker containers work on macOS
+          curl -fsSL "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-x86_64" \
+            -o /usr/local/bin/colima && chmod +x /usr/local/bin/colima
           # docker: CLI to talk to the daemon inside the Colima VM
+          curl -fsSL "https://download.docker.com/mac/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
+            | tar -xz --strip=1 -C /usr/local/bin docker/docker
           # docker-buildx: hack/docker.sh passes --provenance=false to docker build which requires
           #   the buildx plugin; Colima's Docker does not include it by default
-          brew install colima docker docker-buildx
-          echo "colima version: $(colima version)"
           mkdir -p ~/.docker/cli-plugins
-          ln -sf $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
+          curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
+            -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
+          echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
           colima start --cpu 4 --memory 8
-          # Wait for the Docker daemon inside the colima VM to be fully ready.
+          # Wait for the Docker daemon inside the Colima VM to be fully ready.
           # Avoid GNU coreutils 'timeout' which is not available on macOS runners.
           echo "Waiting for Docker daemon to be ready..."
           for i in $(seq 1 30); do
             docker info &>/dev/null && break
             sleep 2
           done
-          # Detect the colima VM's IP by SSHing into the VM and reading
-          # the network interfaces directly. This is more reliable than
-          # 'colima list -j': Lima may not populate the address field in its
-          # metadata for minutes (or at all within our window), whereas the
-          # VM's interface is configured during boot and visible via 'ip addr'
-          # as soon as SSH is available.
-          #
-          # Two subnets depending on the hypervisor backend:
-          #   192.168.64.0/24 — vznat (Apple Virtualization Framework, Apple Silicon)
-          #   192.168.5.0/24  — Lima usernet/SLIRP (QEMU, Intel)
-          #
-          # IMPORTANT: we need the VM's IP, not the macOS host's IP.
-          # util::get_macos_ipaddress uses 'route get default' + 'ipconfig
-          # getifaddr' on the host, which returns the host-side bridge address
-          # (e.g. 192.168.64.1). Docker containers run INSIDE the VM and can
-          # only bind to the VM's own interfaces — so kind must be given the
-          # VM's IP, not the host's.
-          echo "Detecting colima VM IP via SSH..."
-          echo "VM network interfaces (ip -4 addr show):"
-          colima ssh -- ip -4 addr show 2>/dev/null || true
-          COLIMA_IP=""
-          for i in $(seq 1 30); do
-            # Match 192.168.64.x (vznat, Apple Silicon) or 192.168.5.x (Lima
-            # usernet, Intel/QEMU). Take the first match — on Intel the VM's
-            # primary eth0 IP is 192.168.5.1/24 (assigned by DHCP from Lima).
-            COLIMA_IP=$(colima ssh -- ip -4 addr show 2>/dev/null \
-              | awk '/inet (192\.168\.64\.|192\.168\.5\.)/{split($2,a,"/"); print a[1]; exit}' \
-              || true)
-            [[ -n "${COLIMA_IP}" ]] && break
-            sleep 2
-          done
-          if [[ -n "${COLIMA_IP}" ]]; then
-            echo "Colima VM IP: ${COLIMA_IP}"
-            # Verify Docker can actually bind to this IP before kind attempts it.
-            # The vznat interface being up does not guarantee Docker port binding
-            # works yet — this loop gates on the exact mechanism kind uses.
-            # Exits 1 on timeout so the job fails fast and visibly.
-            echo "Waiting for Docker to be able to bind to ${COLIMA_IP}..."
-            BIND_OK=false
-            for i in $(seq 1 60); do
-              docker run --rm --publish "${COLIMA_IP}:19876:19876" alpine true \
-                &>/dev/null 2>&1 && BIND_OK=true && break
-              sleep 2
-            done
-            if [[ "${BIND_OK}" != "true" ]]; then
-              echo "ERROR: Docker could not bind to ${COLIMA_IP} after 120s — kind will fail"
-              exit 1
-            fi
-            # Pre-populate MAC_NIC_IPADDRESS so util::get_macos_ipaddress uses
-            # this confirmed-bindable VM IP and skips host-side auto-detection.
-            echo "MAC_NIC_IPADDRESS=${COLIMA_IP}" >> "${GITHUB_ENV}"
-            echo "${COLIMA_IP} is confirmed bindable — kind is safe to run"
-          else
-            echo "ERROR: could not detect colima VM IP after 60s — aborting"
-            exit 1
-          fi
-      - name: install kind and kubectl
-        run: brew install kind kubectl
+          docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
+      - name: install Go, kind, and kubectl inside colima VM
+        run: |
+          # All cluster tooling (Go, kind, kubectl) runs inside the Colima Linux VM.
+          # Running inside the VM eliminates the macOS/VM IP boundary that caused kind
+          # to fail: kind's net.Listen (port discovery) and Docker's port binding both
+          # operate on the same Linux network stack — no cross-VM address mismatch.
+          colima ssh -- bash -c "
+            set -euo pipefail
+            # Install Go (linux/amd64) to /usr/local/go
+            curl -fsSL 'https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz' \
+              | sudo tar -C /usr/local -xz
+            # Install kind (linux/amd64)
+            sudo curl -fsSL \
+              'https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64' \
+              -o /usr/local/bin/kind
+            sudo chmod +x /usr/local/bin/kind
+            # Install kubectl matching the k8s matrix version
+            sudo curl -fsSL \
+              'https://dl.k8s.io/release/${{ matrix.k8s }}/bin/linux/amd64/kubectl' \
+              -o /usr/local/bin/kubectl
+            sudo chmod +x /usr/local/bin/kubectl
+            export PATH=/usr/local/go/bin:/usr/local/bin:\$PATH
+            echo \"Installed inside VM: go=\$(go version) | kind=\$(kind version) | kubectl=\$(kubectl version --client)\"
+          "
       - name: setup e2e test environment
         run: |
-          export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
-          export KUBE_CACHE_MUTATION_DETECTOR=true
-          hack/local-up-karmada.sh
+          # Run local-up-karmada.sh inside the Colima VM.
+          #
+          # Inside the VM, go env GOOS=linux so util::get_macos_ipaddress is a no-op
+          # and HOST_IPADDRESS stays empty. kind therefore creates clusters with its
+          # default apiServerAddress (127.0.0.1), which it CAN bind on the VM's
+          # loopback. Docker is native (no cross-VM boundary), so port publishing
+          # works correctly too. util::check_clusters_ready uses the linux code path
+          # (Docker-native 172.x.y.z IPs) which are reachable by all containers.
+          #
+          # Lima mounts the macOS home directory into the VM at the same path, so
+          # the checked-out workspace is accessible inside the VM without any copy.
+          WORKSPACE="${{ github.workspace }}"
+          colima ssh -- bash -c "
+            set -euo pipefail
+            export PATH=/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:\$PATH
+            export GOPATH=\$HOME/go
+            export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
+            export KUBE_CACHE_MUTATION_DETECTOR=true
+            cd '${WORKSPACE}'
+            hack/local-up-karmada.sh
+          "
       - name: verify control plane
         run: |
-          export KUBECONFIG=$HOME/.kube/karmada.config
-          kubectl --context karmada-apiserver get pods -A
-          kubectl --context karmada-host get pods -A
+          WORKSPACE="${{ github.workspace }}"
+          colima ssh -- bash -c "
+            set -euo pipefail
+            export PATH=/usr/local/bin:\$PATH
+            export KUBECONFIG=\$HOME/.kube/karmada.config
+            kubectl --context karmada-apiserver get pods -A
+            kubectl --context karmada-host get pods -A
+          "
+      - name: collect kind logs from VM
+        if: always()
+        run: |
+          # Lima's /tmp inside the VM is not automatically mirrored back to macOS,
+          # so we pull the kind logs out via SSH before the upload step.
+          mkdir -p /tmp/karmada
+          colima ssh -- bash -c "tar -C /tmp -czf - karmada 2>/dev/null || true" \
+            | tar -C /tmp -xzf - 2>/dev/null || true
       - name: upload kind logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
