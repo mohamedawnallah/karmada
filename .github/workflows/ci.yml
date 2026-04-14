@@ -368,8 +368,9 @@ jobs:
             'getent hosts registry-1.docker.io && echo "DoH DNS OK" \' \
             '  || { echo "DoH DNS FAILED"; cat /var/log/doh-proxy.log; exit 1; }' \
             'echo "daemon.json content:"; cat /etc/docker/daemon.json' \
-            'systemctl restart docker \' \
-            '  || { echo "Docker restart FAILED:"; journalctl -u docker.service --no-pager -n 50; exit 1; }' \
+            'echo "Port 53 listeners before restart:"; ss -ulnp | grep ":53 " || true' \
+            'timeout 120 systemctl restart docker \' \
+            '  || { echo "Docker restart FAILED (exit=$?):"; journalctl -u docker.service --no-pager -n 60; exit 1; }' \
             > "$DNS_SCRIPT"
           colima ssh -- sudo bash -s < "$DNS_SCRIPT"
           rm -f "$DNS_SCRIPT"
