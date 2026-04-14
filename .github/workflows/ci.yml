@@ -211,7 +211,11 @@ jobs:
           curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
             -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
           echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
-          colima start --cpu 4 --memory 8
+          # --cpu-type host: pass through the Intel host's CPU feature flags (SSE4.2,
+          # AVX, AVX2, etc.) to the QEMU VM. Without this QEMU defaults to the
+          # minimal 'qemu64' CPU model which lacks instructions that Go 1.25's
+          # compiler emits, causing 'signal: illegal instruction' during 'make images'.
+          colima start --cpu 4 --memory 8 --cpu-type host
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
           # Avoid GNU coreutils 'timeout' which is not available on macOS runners.
           echo "Waiting for Docker daemon to be ready..."
