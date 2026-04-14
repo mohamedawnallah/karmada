@@ -286,28 +286,23 @@ jobs:
           #
           # Write Lima global override before colima start so the provision script
           # is baked into the VM's cloud-init user-data at first boot.
+          # NOTE: cannot use a heredoc here — unindented content (e.g. "provision:")
+          # would end GitHub Actions' YAML literal block scalar and break the workflow.
+          # Use echo statements so every line in the YAML file is properly indented.
           mkdir -p "${HOME}/.lima/_config"
-          cat > "${HOME}/.lima/_config/override.yaml" << 'LIMAEOF'
-provision:
-  - mode: system
-    script: |
-      #!/bin/bash
-      set -e
-      # Configure systemd-resolved to use DNS-over-TLS (port 853).
-      # Port 853 is not blocked by the Azure datacenter firewall (unlike port 53).
-      # The VM reaches 1.1.1.1:853 via Lima's usernet NAT, the same path used
-      # for all outbound HTTPS traffic from inside the VM.
-      mkdir -p /etc/systemd/resolved.conf.d
-      cat > /etc/systemd/resolved.conf.d/dot.conf << 'EOF'
-[Resolve]
-DNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com
-DNSSEC=no
-DNSOverTLS=yes
-EOF
-      systemctl restart systemd-resolved
-      # Verify resolution works before Docker uses it.
-      resolvectl query registry-1.docker.io 2>/dev/null && echo "DoT DNS OK" || echo "DoT DNS query failed (non-fatal, Docker build will retry)"
-LIMAEOF
+          {
+            echo 'provision:'
+            echo '  - mode: system'
+            echo '    script: |'
+            echo '      #!/bin/bash'
+            echo '      set -e'
+            echo '      # DNS-over-TLS: port 853 is not blocked by Azure (unlike port 53).'
+            echo '      # The VM reaches 1.1.1.1:853 via Lima usernet NAT (same as HTTPS).'
+            echo '      mkdir -p /etc/systemd/resolved.conf.d'
+            echo "      printf '[Resolve]\nDNS=1.1.1.1#cloudflare-dns.com 1.0.0.1#cloudflare-dns.com\nDNSSEC=no\nDNSOverTLS=yes\n' > /etc/systemd/resolved.conf.d/dot.conf"
+            echo '      systemctl restart systemd-resolved'
+            echo '      resolvectl query registry-1.docker.io 2>/dev/null && echo "DoT DNS OK" || echo "DoT DNS query failed (non-fatal)"'
+          } > "${HOME}/.lima/_config/override.yaml"
           colima start --cpu 4 --memory 6 --vm-type vz --network-address --verbose
           echo "colima status after start:"
           colima status
