@@ -215,7 +215,7 @@ jobs:
           # AVX, AVX2, etc.) to the QEMU VM. Without this QEMU defaults to the
           # minimal 'qemu64' CPU model which lacks instructions that Go 1.25's
           # compiler emits, causing 'signal: illegal instruction' during 'make images'.
-          colima start --cpu 4 --memory 8 --cpu-type host
+          colima start --cpu 6 --memory 12 --cpu-type host
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
           # Avoid GNU coreutils 'timeout' which is not available on macOS runners.
           echo "Waiting for Docker daemon to be ready..."
