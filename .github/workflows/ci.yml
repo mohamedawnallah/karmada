@@ -264,7 +264,11 @@ jobs:
           # when the runner's systemd-resolved already owns port 53, causing the VM's
           # default resolver (192.168.5.1) to time out. Using Google DNS directly
           # inside the VM bypasses the broken proxy and keeps docker pull working.
-          colima start --cpu 6 --memory 12 --vm-type vz --network-address --dns 8.8.8.8 --dns 8.8.4.4 --verbose
+          # --cpu 4 --memory 6: leave headroom on the macOS host for 'go build'
+          # which cross-compiles karmada binaries on the host AFTER colima starts.
+          # With 6 CPUs/12GB the host was OOM-starved and go build was SIGKILL'd
+          # (reported as "cancelled" by GitHub Actions after ~2m44s of silence).
+          colima start --cpu 4 --memory 6 --vm-type vz --network-address --dns 8.8.8.8 --dns 8.8.4.4 --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
@@ -314,15 +318,12 @@ jobs:
           export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
           export KUBE_CACHE_MUTATION_DETECTOR=true
           # hack/build.sh cross-compiles karmada binaries natively on the macOS host
-          # (GOOS=linux GOARCH=amd64 go build). Go 1.25 introduced
-          # runtime.defaultGOMAXPROCSUpdateEnable — a background goroutine that
-          # dynamically overrides GOMAXPROCS based on cgroup CPU quotas. Inside the
-          # colima VM (Linux, no CPU cgroup limit) this goroutine fired and bumped
-          # GOMAXPROCS back from 4 to 6, triggering GC crashes ('unlock of unlocked
-          # lock') in compileFunctions. On the macOS host there are no cgroups, so
-          # the updater goroutine cannot override this value — GOMAXPROCS=4 stays
-          # stable throughout compilation, preventing the GC race.
-          export GOMAXPROCS=4
+          # (GOOS=linux GOARCH=amd64 go build). GOMAXPROCS=2 (not 4) because:
+          # 1. colima VM already occupies 4 of the runner's CPUs; leaving 2 threads
+          #    for go build avoids OOM-kill from memory/CPU starvation.
+          # 2. On macOS there are no cgroups, so Go 1.25's GOMAXPROCS updater
+          #    goroutine is a no-op — the value stays stable throughout compilation.
+          export GOMAXPROCS=2
           hack/local-up-karmada.sh "${VM_IP}"
       - name: run e2e
         run: |
