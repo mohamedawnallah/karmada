@@ -311,9 +311,13 @@ jobs:
           #     to external IPs is blocked by Azure's datacenter firewall.
           #   • Host vmnet IP (192.168.64.1:53): mDNSResponder only serves localhost —
           #     ignores queries arriving from the VM (timeout).
-          # Solution: Python UDP stub on 127.0.0.1:53 encodes each DNS query in
-          #   base64url and forwards to https://1.1.1.1/dns-query (DoH, port 443).
-          #   Outbound TCP 443 is NOT blocked — same path docker pull uses.
+          # Solution: Python UDP stubs on 127.0.0.1:53 (for VM /etc/resolv.conf)
+          #   AND VM_IP:53 (for Docker's embedded DNS upstream in daemon.json).
+          #   Both sockets encode DNS queries in base64url and forward to
+          #   https://1.1.1.1/dns-query (DoH, port 443). TCP 443 is NOT blocked.
+          #   Two sockets are needed because Docker's embedded DNS (127.0.0.11)
+          #   filters loopback upstreams — daemon.json must point to VM_IP (non-loopback)
+          #   while /etc/resolv.conf keeps the proven 127.0.0.1 binding.
           echo "Installing Python DoH proxy in VM..."
           DNS_SCRIPT=$(mktemp)
           # Write the DNS_SCRIPT without any heredocs — bash -s reads from stdin
@@ -342,13 +346,19 @@ jobs:
             'echo "            with u.urlopen(r,context=ctx,timeout=4) as x:" >> /tmp/doh.py' \
             'echo "                s.sendto(x.read(),a); return" >> /tmp/doh.py' \
             'echo "        except Exception as e: print(\"DoH:\",e,flush=True)" >> /tmp/doh.py' \
-            'echo "k=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)" >> /tmp/doh.py' \
-            'echo "k.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)" >> /tmp/doh.py' \
-            'echo "k.bind((\"0.0.0.0\",53))" >> /tmp/doh.py' \
-            'echo "print(\"DoH proxy on 0.0.0.0:53\",flush=True)" >> /tmp/doh.py' \
-            'echo "while True:" >> /tmp/doh.py' \
-            'echo "    d,a=k.recvfrom(4096)" >> /tmp/doh.py' \
-            'echo "    threading.Thread(target=h,args=(d,a,k),daemon=True).start()" >> /tmp/doh.py' \
+            'echo "def listen(k):" >> /tmp/doh.py' \
+            'echo "    while True:" >> /tmp/doh.py' \
+            'echo "        d,a=k.recvfrom(4096)" >> /tmp/doh.py' \
+            'echo "        threading.Thread(target=h,args=(d,a,k),daemon=True).start()" >> /tmp/doh.py' \
+            'echo "k1=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)" >> /tmp/doh.py' \
+            'echo "k1.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)" >> /tmp/doh.py' \
+            'echo "k1.bind((\"127.0.0.1\",53))" >> /tmp/doh.py' \
+            "echo \"k2=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\" >> /tmp/doh.py" \
+            "echo \"k2.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\" >> /tmp/doh.py" \
+            "echo \"k2.bind(('${VM_IP}',53))\" >> /tmp/doh.py" \
+            "echo \"print('DoH proxy on 127.0.0.1:53 and ${VM_IP}:53',flush=True)\" >> /tmp/doh.py" \
+            "echo \"threading.Thread(target=listen,args=(k2,),daemon=True).start()\" >> /tmp/doh.py" \
+            'echo "listen(k1)" >> /tmp/doh.py' \
             'nohup python3 /tmp/doh.py >/var/log/doh-proxy.log 2>&1 &' \
             'sleep 3' \
             'rm -f /etc/resolv.conf' \
