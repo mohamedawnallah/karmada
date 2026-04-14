@@ -288,25 +288,29 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after 60s"; exit 1; }
-          # Fix Docker DNS inside the VM.
-          # --dns 192.168.64.1 sets Lima's usernet DHCP nameserver, but Docker daemon
-          # starts during VM boot before Lima applies our custom DNS — it inherits
-          # 192.168.5.1 from Lima's default cloud-init resolv.conf. 192.168.5.1:53 is
-          # Lima's usernet DNS proxy, which is broken because Lima cannot bind 0.0.0.0:53
-          # on the host (already in use by the runner's own DNS). External IPs (8.8.8.8)
-          # are blocked by the Azure datacenter firewall.
-          # Fix: write daemon.json directly so dockerd uses 192.168.64.1 (host vmnet IP,
-          # where the host's working DNS service is reachable from the VM) for all
-          # container DNS lookups, then restart dockerd to pick it up.
-          echo "Configuring Docker daemon DNS in VM to 192.168.64.1..."
-          colima ssh -- sudo sh -c 'mkdir -p /etc/docker && printf "{\"dns\":[\"192.168.64.1\"]}\n" > /etc/docker/daemon.json'
-          colima ssh -- sudo systemctl restart docker
+          # Fix VM DNS for Docker daemon AND BuildKit.
+          # Problem: Lima's usernet assigns 192.168.5.1:53 as the VM's DNS, but
+          # Lima's DNS proxy can't bind 0.0.0.0:53 on the host (already in use) →
+          # 192.168.5.1:53 is unresponsive. External IPs (8.8.8.8) blocked by Azure.
+          #
+          # Why daemon.json alone is insufficient:
+          #   'docker build' uses BuildKit (buildkitd), which resolves DNS using the
+          #   VM's /etc/resolv.conf directly (host network namespace), NOT Docker's
+          #   embedded DNS or daemon.json "dns" entries. On Ubuntu (Lima's base image),
+          #   /etc/resolv.conf is a symlink → systemd-resolved stub (127.0.0.53) →
+          #   forwards to 192.168.5.1 → timeout.
+          #
+          # Fix: replace /etc/resolv.conf symlink with a real file pointing to
+          #   192.168.64.1 (host's vmnet IP; host DNS is reachable there). Also write
+          #   daemon.json for Docker daemon's own resolver. Restart Docker to pick up.
+          echo "Fixing VM DNS (resolv.conf + daemon.json) to use host vmnet IP 192.168.64.1..."
+          colima ssh -- sudo bash -c 'rm -f /etc/resolv.conf && printf "nameserver 192.168.64.1\n" > /etc/resolv.conf && mkdir -p /etc/docker && printf "{\"dns\":[\"192.168.64.1\"]}\n" > /etc/docker/daemon.json && systemctl restart docker'
           for i in $(seq 1 30); do
             docker info &>/dev/null && break
             sleep 2
           done
-          docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after daemon.json restart"; exit 1; }
-          echo "Docker daemon DNS fix applied."
+          docker info &>/dev/null || { echo "ERROR: Docker daemon not ready after DNS fix restart"; exit 1; }
+          echo "VM DNS fix applied (resolv.conf and daemon.json → 192.168.64.1)."
           # Extract the VM's vmnet IP assigned by --network-address.
           # 'colima list -o json' uses the key "address" (not "ip_address"), and omits
           # it entirely when empty (omitempty). Parsing the text table is more reliable.
