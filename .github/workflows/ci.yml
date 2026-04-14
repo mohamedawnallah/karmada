@@ -260,7 +260,11 @@ jobs:
           # time and completes successfully. This is expected behaviour.
           #
           # --verbose surfaces Lima/VZ logs so hangs are diagnosable in CI.
-          colima start --cpu 6 --memory 12 --vm-type vz --network-address --verbose
+          # --dns 8.8.8.8: Lima's DNS proxy (port 53 on the host) fails to bind
+          # when the runner's systemd-resolved already owns port 53, causing the VM's
+          # default resolver (192.168.5.1) to time out. Using Google DNS directly
+          # inside the VM bypasses the broken proxy and keeps docker pull working.
+          colima start --cpu 6 --memory 12 --vm-type vz --network-address --dns 8.8.8.8 --dns 8.8.4.4 --verbose
           echo "colima status after start:"
           colima status
           # Wait for the Docker daemon inside the Colima VM to be fully ready.
