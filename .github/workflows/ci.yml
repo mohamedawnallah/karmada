@@ -208,15 +208,53 @@ jobs:
           sudo curl -fsSL \
             "https://dl.k8s.io/release/${{ matrix.k8s }}/bin/darwin/amd64/kubectl" \
             -o /usr/local/bin/kubectl && sudo chmod +x /usr/local/bin/kubectl
-          # Download Alpine minirootfs HERE (before colima start) because colima's
-          # VZ --network-address mode temporarily disrupts macOS host DNS during startup.
-          # The file is shared into the colima VM via virtiofs (colima mounts ${HOME}
-          # at the same path inside the VM) so no network access is needed from the VM.
+          # Download Alpine minirootfs + apk packages HERE (before colima start) because:
+          #   1. colima's VZ --network-address disrupts macOS host DNS during startup.
+          #   2. Lima's usernet (gvisor-tap-vsock) TCP stack hangs on large downloads
+          #      from inside the VM (both rootfs and package downloads affected).
+          # All files are shared into the VM via virtiofs (colima mounts ${HOME} at the
+          # same path inside the VM) and installed offline — no VM network access needed.
+          ALPINE_DIR="${HOME}/alpine-assets"
+          mkdir -p "${ALPINE_DIR}"
+          # Alpine minirootfs (base filesystem)
           curl -fsSL --max-time 120 --retry 3 --retry-delay 2 \
             "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
-            -o "${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
+            -o "${ALPINE_DIR}/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
             || { echo "FATAL: cannot download Alpine rootfs"; exit 1; }
-          echo "Alpine rootfs downloaded: $(ls -lh ${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz)"
+          # Parse APKINDEX to find exact package versions for offline installation.
+          # karmada's cluster/images/Dockerfile requires ca-certificates and tzdata.
+          # ca-certificates depends on ca-certificates-bundle; both must be provided.
+          curl -fsSL --max-time 60 --retry 3 \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz" \
+            | tar -xzO APKINDEX 2>/dev/null > "${HOME}/APKINDEX-main.txt" \
+            || { echo "FATAL: cannot download APKINDEX"; exit 1; }
+          get_ver() {
+            local pkg=$1
+            awk -v p="$pkg" '
+              /^P:/{cur=substr($0,3); v=""}
+              cur==p && /^V:/{v=substr($0,3)}
+              /^$/{if(cur==p && v!=""){print v; exit} cur=""; v=""}
+              END{if(cur==p && v!=""){print v}}
+            ' "${HOME}/APKINDEX-main.txt"
+          }
+          CA_VER=$(get_ver "ca-certificates")
+          CAB_VER=$(get_ver "ca-certificates-bundle")
+          TZ_VER=$(get_ver "tzdata")
+          echo "Package versions: ca-certificates=${CA_VER} bundle=${CAB_VER} tzdata=${TZ_VER}"
+          BASE_PKG_URL="https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64"
+          curl -fsSL --max-time 60 --retry 3 \
+            "${BASE_PKG_URL}/ca-certificates-bundle-${CAB_VER}.apk" \
+            -o "${ALPINE_DIR}/ca-certificates-bundle.apk" \
+            || { echo "FATAL: cannot download ca-certificates-bundle"; exit 1; }
+          curl -fsSL --max-time 60 --retry 3 \
+            "${BASE_PKG_URL}/ca-certificates-${CA_VER}.apk" \
+            -o "${ALPINE_DIR}/ca-certificates.apk" \
+            || { echo "FATAL: cannot download ca-certificates"; exit 1; }
+          curl -fsSL --max-time 60 --retry 3 \
+            "${BASE_PKG_URL}/tzdata-${TZ_VER}.apk" \
+            -o "${ALPINE_DIR}/tzdata.apk" \
+            || { echo "FATAL: cannot download tzdata"; exit 1; }
+          echo "Alpine assets downloaded: $(ls -lh ${ALPINE_DIR})"
           export PATH=/usr/local/go/bin:$PATH
           echo "Installed on macOS host: go=$(go version) | kind=$(kind version) | kubectl=$(kubectl version --client)"
       - name: install and start colima (docker) with network address
@@ -407,41 +445,33 @@ jobs:
             sleep 2
           done
           docker info &>/dev/null || { echo "ERROR: Docker not ready after DNS fix"; exit 1; }
-          # Build alpine:3.23.3 locally from Alpine Linux CDN rootfs to bypass Docker Hub.
-          # registry-1.docker.io (Docker Hub registry, hosted on AWS) returns
-          # "connection refused" from the colima VM on Azure macOS runners — Azure likely
-          # blocks or interferes with those specific AWS IP ranges outbound. Alpine Linux's
-          # CDN rootfs was downloaded in the previous step (before colima start, when host
-          # DNS is clean). colima mounts ${HOME} via virtiofs at the same path inside the
-          # VM, so the file is visible inside the VM with no network access needed.
-          # 'FROM scratch' + ADD in docker build requires NO network access inside the VM.
+          # Build alpine:3.23.3 with ca-certificates + tzdata pre-installed, entirely
+          # offline. All assets (rootfs + .apk packages) were downloaded on the macOS
+          # host in the previous step (before colima start, with clean DNS) and are
+          # shared into the VM via virtiofs at the same path. No VM network access needed.
           #
-          # We also pre-install ca-certificates and tzdata (required by karmada's
-          # cluster/images/Dockerfile) while DNS is working, then clear /etc/apk/repositories.
-          # karmada's Dockerfile has "ARG BINARY" before "RUN apk add", so BuildKit creates
-          # separate cache entries per binary (~20+), running apk add once per image.
-          # With packages already installed and no repos configured, apk add returns 0
-          # immediately without any network access — eliminating DNS dependency per-build.
-          echo "Building alpine:3.23.3 inside VM using virtiofs-shared rootfs..."
+          # The Dockerfile uses COPY to bring in pre-downloaded .apk files and installs
+          # them with 'apk add --allow-untrusted' (local files, no repo fetch).
+          # /etc/apk/repositories is cleared so that karmada's Dockerfile lines:
+          #   RUN apk add --no-cache ca-certificates
+          #   RUN apk add --no-cache tzdata
+          # find packages already installed + no repos to sync => return 0, no network.
+          # (karmada Dockerfile has ARG BINARY before RUN, so BuildKit caches per-binary
+          # and runs apk add once per image ~20 times; with offline base this is fine.)
+          echo "Building alpine:3.23.3 (offline, all assets from virtiofs) inside VM..."
           ALPINE_SCRIPT=$(mktemp)
           printf '%s\n' \
             '#!/bin/bash' \
             'set -e' \
             'mkdir -p /tmp/alpine-build' \
-            "cp \"${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz\" /tmp/alpine-build/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
-            'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
-            'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3-bare /tmp/alpine-build/' \
+            "cp \"${HOME}/alpine-assets/alpine-minirootfs-3.23.3-x86_64.tar.gz\" /tmp/alpine-build/" \
+            "cp \"${HOME}/alpine-assets/ca-certificates-bundle.apk\" /tmp/alpine-build/" \
+            "cp \"${HOME}/alpine-assets/ca-certificates.apk\" /tmp/alpine-build/" \
+            "cp \"${HOME}/alpine-assets/tzdata.apk\" /tmp/alpine-build/" \
+            'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCOPY ca-certificates-bundle.apk /tmp/\nCOPY ca-certificates.apk /tmp/\nCOPY tzdata.apk /tmp/\nRUN apk add --allow-untrusted /tmp/ca-certificates-bundle.apk /tmp/ca-certificates.apk /tmp/tzdata.apk && rm /tmp/*.apk && echo > /etc/apk/repositories\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
+            'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3 /tmp/alpine-build/' \
             'rm -rf /tmp/alpine-build' \
-            '# Pre-install ca-certificates + tzdata while DNS is fresh, then clear repos.' \
-            'CID=$(docker run -d alpine:3.23.3-bare sh -c "apk add --no-cache ca-certificates tzdata; echo > /etc/apk/repositories")' \
-            'EXIT_CODE=$(docker wait "$CID")' \
-            'if [ "$EXIT_CODE" -ne 0 ]; then' \
-            '  echo "ERROR: pre-install failed (exit=$EXIT_CODE):"' \
-            '  docker logs "$CID"; docker rm "$CID"; exit 1' \
-            'fi' \
-            'docker commit "$CID" alpine:3.23.3' \
-            'docker rm "$CID"' \
-            'echo "alpine:3.23.3 created with ca-certificates+tzdata pre-installed, repos cleared"' \
+            'echo "alpine:3.23.3 created with ca-certificates+tzdata pre-installed offline"' \
             'docker images alpine:3.23.3' \
             > "$ALPINE_SCRIPT"
           colima ssh -- sudo bash -s < "$ALPINE_SCRIPT"
