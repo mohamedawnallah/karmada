@@ -415,6 +415,13 @@ jobs:
           # DNS is clean). colima mounts ${HOME} via virtiofs at the same path inside the
           # VM, so the file is visible inside the VM with no network access needed.
           # 'FROM scratch' + ADD in docker build requires NO network access inside the VM.
+          #
+          # We also pre-install ca-certificates and tzdata (required by karmada's
+          # cluster/images/Dockerfile) while DNS is working, then clear /etc/apk/repositories.
+          # karmada's Dockerfile has "ARG BINARY" before "RUN apk add", so BuildKit creates
+          # separate cache entries per binary (~20+), running apk add once per image.
+          # With packages already installed and no repos configured, apk add returns 0
+          # immediately without any network access — eliminating DNS dependency per-build.
           echo "Building alpine:3.23.3 inside VM using virtiofs-shared rootfs..."
           ALPINE_SCRIPT=$(mktemp)
           printf '%s\n' \
@@ -423,9 +430,18 @@ jobs:
             'mkdir -p /tmp/alpine-build' \
             "cp \"${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz\" /tmp/alpine-build/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
             'printf "FROM scratch\nADD alpine-minirootfs-3.23.3-x86_64.tar.gz /\nCMD [\"/bin/sh\"]\n" > /tmp/alpine-build/Dockerfile' \
-            'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3 /tmp/alpine-build/' \
+            'DOCKER_BUILDKIT=0 docker build -t alpine:3.23.3-bare /tmp/alpine-build/' \
             'rm -rf /tmp/alpine-build' \
-            'echo "alpine:3.23.3 created from host-downloaded rootfs"' \
+            '# Pre-install ca-certificates + tzdata while DNS is fresh, then clear repos.' \
+            'CID=$(docker run -d alpine:3.23.3-bare sh -c "apk add --no-cache ca-certificates tzdata; echo > /etc/apk/repositories")' \
+            'EXIT_CODE=$(docker wait "$CID")' \
+            'if [ "$EXIT_CODE" -ne 0 ]; then' \
+            '  echo "ERROR: pre-install failed (exit=$EXIT_CODE):"' \
+            '  docker logs "$CID"; docker rm "$CID"; exit 1' \
+            'fi' \
+            'docker commit "$CID" alpine:3.23.3' \
+            'docker rm "$CID"' \
+            'echo "alpine:3.23.3 created with ca-certificates+tzdata pre-installed, repos cleared"' \
             'docker images alpine:3.23.3' \
             > "$ALPINE_SCRIPT"
           colima ssh -- sudo bash -s < "$ALPINE_SCRIPT"
