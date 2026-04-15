@@ -198,12 +198,64 @@ if [[ "$(uname)" == "Darwin" ]] && [[ -n "${HOST_IPADDRESS}" ]]; then
   echo "Removed lo0 alias ${HOST_IPADDRESS} (kind containers running, port probes done)"
 fi
 
+# darwin_check_clusters_ready: Darwin-specific variant of util::check_clusters_ready.
+# On macOS with colima (vmnet-shared NAT), port-mapped addresses (e.g. 192.168.64.2:PORT)
+# are bound inside the VM — macOS host processes cannot TCP-connect inbound to them.
+# This function performs the same kubeconfig setup as util::check_clusters_ready but runs
+# the healthz probe inside the VM via 'colima ssh', where the container's Docker bridge IP
+# is directly routable without any port mapping.
+darwin_check_clusters_ready() {
+  local kubeconfig="${1}"
+  local ctx="${2}"
+  echo "Waiting for kubeconfig file ${kubeconfig} and cluster ${ctx} to be ready..."
+  util::wait_file_exist "${kubeconfig}" 300
+  util::wait_for_condition 'running' \
+    "docker inspect --format='{{.State.Status}}' ${ctx}-control-plane &> /dev/null" 300
+  kubectl config rename-context "kind-${ctx}" "${ctx}" \
+    --kubeconfig="${kubeconfig}" 2>/dev/null || true
+  local container_ip_port
+  container_ip_port=$(util::get_docker_host_ip_port "${ctx}-control-plane")
+  kubectl config set-cluster "kind-${ctx}" \
+    --server="https://${container_ip_port}" \
+    --kubeconfig="${kubeconfig}"
+  # Get the container's Docker bridge IP — directly routable from inside the VM.
+  # We query this from the macOS host (via DOCKER_HOST unix socket) which talks to
+  # the VM's Docker daemon and returns the container's internal IP.
+  local bridge_ip
+  bridge_ip=$(docker inspect \
+    --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "${ctx}-control-plane" 2>/dev/null | head -1)
+  echo "Checking healthz for ${ctx} via colima ssh (container bridge IP: ${bridge_ip})..."
+  # Run healthz from inside the VM via colima ssh. 150 retries × 2 s = 300 s max.
+  local count=0
+  while true; do
+    if colima ssh -- bash -c \
+      "curl -sk 'https://${bridge_ip}:6443/healthz' 2>/dev/null | grep -q ok" 2>/dev/null; then
+      echo "${ctx} healthz: ok"
+      break
+    fi
+    if [[ ${count} -ge 150 ]]; then
+      echo "[ERROR] Timeout waiting for condition ok (${ctx})"
+      return 1
+    fi
+    count=$((count + 1))
+    sleep 2
+  done
+}
+
 #step3. wait until clusters ready
 echo "Waiting for the clusters to be ready..."
-util::check_clusters_ready "${MAIN_KUBECONFIG}" "${HOST_CLUSTER_NAME}"
-util::check_clusters_ready "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${MEMBER_CLUSTER_1_NAME}"
-util::check_clusters_ready "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${MEMBER_CLUSTER_2_NAME}"
-util::check_clusters_ready "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${PULL_MODE_CLUSTER_NAME}"
+if [[ "$(uname)" == "Darwin" ]] && [[ -n "${HOST_IPADDRESS}" ]]; then
+  darwin_check_clusters_ready "${MAIN_KUBECONFIG}" "${HOST_CLUSTER_NAME}"
+  darwin_check_clusters_ready "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${MEMBER_CLUSTER_1_NAME}"
+  darwin_check_clusters_ready "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${MEMBER_CLUSTER_2_NAME}"
+  darwin_check_clusters_ready "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${PULL_MODE_CLUSTER_NAME}"
+else
+  util::check_clusters_ready "${MAIN_KUBECONFIG}" "${HOST_CLUSTER_NAME}"
+  util::check_clusters_ready "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${MEMBER_CLUSTER_1_NAME}"
+  util::check_clusters_ready "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${MEMBER_CLUSTER_2_NAME}"
+  util::check_clusters_ready "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${PULL_MODE_CLUSTER_NAME}"
+fi
 
 #step4. load components images to kind cluster
 if [[ "${BUILD_FROM_SOURCE}" == "true" ]]; then
