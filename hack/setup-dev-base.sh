@@ -148,6 +148,16 @@ if [[ -n "${HOST_IPADDRESS}" ]]; then # If bind the port of clusters(karmada-hos
   sed -i'' -e 's/networking:/&\'$'\n''  apiServerAddress: "'${HOST_IPADDRESS}'"/' "${TEMP_PATH}"/member1.yaml
   sed -i'' -e 's/networking:/&\'$'\n''  apiServerAddress: "'${HOST_IPADDRESS}'"/' "${TEMP_PATH}"/member2.yaml
   sed -i'' -e 's/networking:/&\'$'\n''  apiServerAddress: "'${HOST_IPADDRESS}'"/' "${TEMP_PATH}"/member3.yaml
+  # On macOS/Darwin with a colima VM, HOST_IPADDRESS is the VM's vmnet IP
+  # (e.g. 192.168.64.2) which is NOT a local macOS interface. kind's port probe
+  # (net.Listen on HOST_IPADDRESS) runs on the macOS host process and requires
+  # the address to be local — add a temporary lo0 alias so the probe succeeds.
+  # IMPORTANT: the alias is removed before util::check_clusters_ready below;
+  # keeping it would route kubectl healthz traffic to loopback instead of the VM.
+  if [[ "$(uname)" == "Darwin" ]]; then
+    sudo ifconfig lo0 alias "${HOST_IPADDRESS}" 255.255.255.255 2>/dev/null || true
+    echo "Added lo0 alias ${HOST_IPADDRESS} for kind port probe"
+  fi
   util::create_cluster "${HOST_CLUSTER_NAME}" "${MAIN_KUBECONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/karmada-host.yaml
 else
   util::create_cluster "${HOST_CLUSTER_NAME}" "${MAIN_KUBECONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}"
@@ -170,6 +180,23 @@ echo "karmada-host created. Starting member clusters in parallel..."
 util::create_cluster "${MEMBER_CLUSTER_1_NAME}" "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member1.yaml
 util::create_cluster "${MEMBER_CLUSTER_2_NAME}" "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member2.yaml
 util::create_cluster "${PULL_MODE_CLUSTER_NAME}" "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member3.yaml
+
+# Remove lo0 alias now that all kind cluster port probes are complete.
+# kind's port probe (net.Listen) runs before container creation. Once each
+# kind node container is running, its probe is definitively done.
+# Keeping the alias routes kubectl traffic to loopback instead of the VM,
+# causing util::check_clusters_ready's healthz checks to fail with
+# connection-refused from loopback rather than reaching the API server in the VM.
+if [[ "$(uname)" == "Darwin" ]] && [[ -n "${HOST_IPADDRESS}" ]]; then
+  for _cluster in "${HOST_CLUSTER_NAME}" "${MEMBER_CLUSTER_1_NAME}" "${MEMBER_CLUSTER_2_NAME}" "${PULL_MODE_CLUSTER_NAME}"; do
+    for _i in $(seq 1 30); do
+      docker ps --filter "name=${_cluster}-control-plane" --filter "status=running" --quiet 2>/dev/null | grep -q . && break
+      sleep 2
+    done
+  done
+  sudo ifconfig lo0 -alias "${HOST_IPADDRESS}" 2>/dev/null || true
+  echo "Removed lo0 alias ${HOST_IPADDRESS} (kind containers running, port probes done)"
+fi
 
 #step3. wait until clusters ready
 echo "Waiting for the clusters to be ready..."
