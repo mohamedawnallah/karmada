@@ -543,6 +543,15 @@ jobs:
           #   and the Karmada API server is bound to VM_IP:5443.
           # Kubeconfig endpoints end up as https://VM_IP:PORT — directly reachable
           # from macOS via the vmnet interface created by --network-address.
+          #
+          # Add VM_IP as a loopback alias on the macOS host.
+          # kind probes listenAddress with net.Listen() on the host process before
+          # instructing Docker to bind the port inside the colima VM. Without this
+          # alias, 192.168.64.2 is not a local macOS interface and the probe fails:
+          #   "listen tcp 192.168.64.2:0: bind: can't assign requested address"
+          # Docker inside colima independently binds VM_IP:PORT on the VM's real
+          # vmnet interface, so there is no conflict.
+          sudo ifconfig lo0 alias "${VM_IP}" 255.255.255.255
           export PATH=/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$PATH
           export GOPATH=$HOME/go
           export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}
