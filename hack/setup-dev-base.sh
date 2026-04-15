@@ -170,6 +170,15 @@ if [[ "${BUILD_FROM_SOURCE}" == "true" ]]; then
   kind load docker-image "${REGISTRY}/karmada-agent:${VERSION}" --name="${PULL_MODE_CLUSTER_NAME}"
 fi
 
+# Load any extra images into all member clusters (set EXTRA_IMAGES_LOAD_TO_MEMBER_CLUSTERS
+# to a comma-separated list).  Useful for pre-seeding images that would otherwise be pulled
+# from the internet by containerd inside the kind nodes (e.g. metrics-server).
+for img in ${EXTRA_IMAGES_LOAD_TO_MEMBER_CLUSTERS//,/ }; do
+  kind load docker-image "$img" --name="${MEMBER_CLUSTER_1_NAME}"
+  kind load docker-image "$img" --name="${MEMBER_CLUSTER_2_NAME}"
+  kind load docker-image "$img" --name="${PULL_MODE_CLUSTER_NAME}"
+done
+
 #step5. connecting networks between karmada-host, member1 and member2 clusters
 echo "connecting cluster networks..."
 util::add_routes "${MEMBER_CLUSTER_1_NAME}" "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${MEMBER_CLUSTER_2_NAME}"

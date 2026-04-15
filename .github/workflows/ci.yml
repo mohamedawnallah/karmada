@@ -483,6 +483,42 @@ jobs:
           colima ssh -- sudo bash -s < "$ALPINE_SCRIPT"
           rm -f "$ALPINE_SCRIPT"
           echo "Python DoH DNS fix applied."
+          # Pre-pull container images into the VM's Docker daemon.
+          #
+          # Background: util::create_cluster (setup-dev-base.sh) starts 4 kind clusters
+          # in background (nohup ... &), then make images runs (~16 min), and only THEN
+          # util::check_clusters_ready starts with a 300-second timeout.  If Docker
+          # needs to pull kindest/node:v1.35.0 (~1-2 GB) from docker.io at that point,
+          # the pull races against the timeout and often loses.
+          #
+          # Fix: pull all needed images here (DoH DNS is already working; vmnet gives the
+          # VM real internet access via the macOS host). With images cached in Docker,
+          # kind create cluster takes <60 s (no network pull) and the 300-s window is
+          # more than enough.
+          #
+          # Images loaded here:
+          #   kindest/node           — used directly by Docker to create kind node containers
+          #   registry.k8s.io/etcd   — pulled by containerd inside karmada-host kind nodes
+          #                            for the karmada-etcd StatefulSet
+          #   kube-apiserver/kcm     — same, for the karmada apiserver/controller-manager
+          #   metrics-server         — pulled by containerd in member cluster kind nodes
+          #
+          # We use DOCKER_HOST explicitly (GITHUB_ENV is not yet read in the current step).
+          export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
+          K8S_VER="${{ matrix.k8s }}"
+          echo "Pre-pulling container images into VM Docker..."
+          docker pull "kindest/node:${K8S_VER}" \
+            || { echo "ERROR: failed to pull kindest/node:${K8S_VER}"; exit 1; }
+          docker pull "registry.k8s.io/etcd:3.6.6-0" \
+            || echo "WARNING: failed to pre-pull registry.k8s.io/etcd:3.6.6-0 (will retry on demand)"
+          docker pull "registry.k8s.io/kube-apiserver:${K8S_VER}" \
+            || echo "WARNING: failed to pre-pull kube-apiserver:${K8S_VER}"
+          docker pull "registry.k8s.io/kube-controller-manager:${K8S_VER}" \
+            || echo "WARNING: failed to pre-pull kube-controller-manager:${K8S_VER}"
+          docker pull "registry.k8s.io/metrics-server/metrics-server:v0.6.3" \
+            || echo "WARNING: failed to pre-pull metrics-server:v0.6.3"
+          echo "Pre-pull complete. Cached Docker images:"
+          docker images
           # Propagate to all subsequent steps via GITHUB_ENV.
           # DOCKER_HOST: host-side docker/kind/kubectl talk to VM's Docker daemon.
           echo "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock" >> $GITHUB_ENV
@@ -518,6 +554,15 @@ jobs:
           # 2. On macOS there are no cgroups, so Go 1.25's GOMAXPROCS updater
           #    goroutine is a no-op — the value stays stable throughout compilation.
           export GOMAXPROCS=2
+          # These images were pre-pulled into VM Docker in the previous step.
+          # setup-dev-base.sh's kind-load loop copies them from Docker into each
+          # kind node's containerd, so pods never need to pull from the internet.
+          #   HOST cluster: karmada-etcd (registry.k8s.io/etcd:3.6.6-0),
+          #                  karmada-apiserver and kube-controller-manager (v1.35.0).
+          #   MEMBER clusters: metrics-server (v0.6.3) deployed by
+          #                    hack/deploy-k8s-metrics-server.sh in all 3 member clusters.
+          export EXTRA_IMAGES_LOAD_TO_HOST_CLUSTER="registry.k8s.io/etcd:3.6.6-0,registry.k8s.io/kube-apiserver:${{ matrix.k8s }},registry.k8s.io/kube-controller-manager:${{ matrix.k8s }}"
+          export EXTRA_IMAGES_LOAD_TO_MEMBER_CLUSTERS="registry.k8s.io/metrics-server/metrics-server:v0.6.3"
           hack/local-up-karmada.sh "${VM_IP}"
       - name: run e2e
         run: |
@@ -539,8 +584,14 @@ jobs:
           # kind containers live inside the colima VM's Docker. 'kind export logs'
           # with DOCKER_HOST set talks to the VM daemon and writes logs locally.
           # Colima ssh fallback covers any logs written to /tmp/karmada in the VM.
+          # Also copy host-side kind creation logs (written by util::create_cluster
+          # via nohup into /tmp/karmada/*.log on the macOS host) — these contain
+          # kind's stdout/stderr during cluster creation and are crucial for debugging
+          # failures in util::check_clusters_ready.
           mkdir -p /tmp/karmada
           export PATH=/usr/local/go/bin:/usr/local/bin:$PATH
+          # Host-side kind creation logs (always present after util::create_cluster)
+          ls /tmp/karmada/*.log 2>/dev/null && echo "--- kind creation logs (host side) ---" || true
           for cluster in karmada-host member1 member2 member3; do
             kind export logs /tmp/karmada --name "${cluster}" 2>/dev/null || true
           done
