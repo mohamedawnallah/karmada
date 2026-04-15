@@ -526,15 +526,20 @@ jobs:
           export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
           K8S_VER="${{ matrix.k8s }}"
           echo "Pre-pulling container images into VM Docker..."
-          docker pull "kindest/node:${K8S_VER}" \
+          # --platform linux/amd64 is required: without it Docker stores a
+          # multi-arch manifest index referencing platform variants whose layers
+          # are not actually downloaded. 'kind load docker-image' then pipes
+          # through 'ctr import --all-platforms', which fails because the
+          # non-amd64 layer digests are absent from the content store.
+          docker pull --platform linux/amd64 "kindest/node:${K8S_VER}" \
             || { echo "ERROR: failed to pull kindest/node:${K8S_VER}"; exit 1; }
-          docker pull "registry.k8s.io/etcd:3.6.6-0" \
+          docker pull --platform linux/amd64 "registry.k8s.io/etcd:3.6.6-0" \
             || echo "WARNING: failed to pre-pull registry.k8s.io/etcd:3.6.6-0 (will retry on demand)"
-          docker pull "registry.k8s.io/kube-apiserver:${K8S_VER}" \
+          docker pull --platform linux/amd64 "registry.k8s.io/kube-apiserver:${K8S_VER}" \
             || echo "WARNING: failed to pre-pull kube-apiserver:${K8S_VER}"
-          docker pull "registry.k8s.io/kube-controller-manager:${K8S_VER}" \
+          docker pull --platform linux/amd64 "registry.k8s.io/kube-controller-manager:${K8S_VER}" \
             || echo "WARNING: failed to pre-pull kube-controller-manager:${K8S_VER}"
-          docker pull "registry.k8s.io/metrics-server/metrics-server:v0.6.3" \
+          docker pull --platform linux/amd64 "registry.k8s.io/metrics-server/metrics-server:v0.6.3" \
             || echo "WARNING: failed to pre-pull metrics-server:v0.6.3"
           echo "Pre-pull complete. Cached Docker images:"
           docker images
