@@ -554,13 +554,18 @@ jobs:
           # MAC_NIC_IPADDRESS: honoured by util::get_macos_ipaddress (early-return path)
           #   so the Karmada API server binds to VM_IP:5443 (reachable from macOS + VM).
           echo "MAC_NIC_IPADDRESS=${VM_IP}" >> $GITHUB_ENV
-          # colima's VZ --network-address briefly disrupts macOS host network routing
-          # when the vmnet interface activates. If the GitHub Actions runner daemon
-          # loses its heartbeat connection to GitHub at this moment, the NEXT step
-          # is marked "The operation was canceled" before it produces any log output.
-          # Wait here (still in step 4) until HTTPS to GitHub is restored, so the
-          # runner is fully reconnected before step 5 begins.
-          echo "Waiting for macOS host network to stabilize after colima vmnet activation..."
+          # Add lo0 alias HERE (end of step 4) so the routing-cache flush it causes
+          # is absorbed by the curl connectivity loop below, rather than happening
+          # mid-step-5 and cancelling that step's runner heartbeat.
+          sudo ifconfig lo0 alias "${VM_IP}" 255.255.255.255 2>/dev/null || true
+          echo "Added lo0 alias ${VM_IP} for kind port probe (disruption absorbed by curl loop below)"
+          # colima's VZ --network-address and the lo0 alias above both briefly disrupt
+          # macOS host network routing when the vmnet/loopback interface changes.
+          # If the GitHub Actions runner daemon loses its heartbeat connection to GitHub
+          # at this moment, the NEXT step is marked "The operation was canceled" before
+          # it produces any log output. Wait here (still in step 4) until HTTPS to
+          # GitHub is restored, so the runner is fully reconnected before step 5 begins.
+          echo "Waiting for macOS host network to stabilize after colima vmnet + lo0 alias..."
           for _i in $(seq 1 30); do
             if curl -sf --max-time 5 https://api.github.com/zen > /dev/null 2>&1; then
               echo "macOS host network: ok (attempt ${_i})"
@@ -584,9 +589,11 @@ jobs:
           # from macOS via the vmnet interface created by --network-address.
           #
           # Note: the lo0 alias for VM_IP (needed for kind's net.Listen port probe)
-          # is now managed inside hack/setup-dev-base.sh: added before
-          # util::create_cluster calls, removed before util::check_clusters_ready
-          # so kubectl healthz traffic routes to the real VM interface, not loopback.
+          # is added at the END of step 4 (above), so its routing-cache flush is
+          # absorbed by the curl connectivity loop there before this step starts.
+          # The alias is removed inside hack/setup-dev-base.sh once all kind node
+          # containers are running (port probes done), so healthz traffic routes
+          # to the real VM interface, not loopback.
           export PATH=/usr/local/go/bin:/usr/local/bin:$HOME/go/bin:$PATH
           export GOPATH=$HOME/go
           export CLUSTER_VERSION=kindest/node:${{ matrix.k8s }}

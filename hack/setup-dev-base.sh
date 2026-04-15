@@ -151,13 +151,10 @@ if [[ -n "${HOST_IPADDRESS}" ]]; then # If bind the port of clusters(karmada-hos
   # On macOS/Darwin with a colima VM, HOST_IPADDRESS is the VM's vmnet IP
   # (e.g. 192.168.64.2) which is NOT a local macOS interface. kind's port probe
   # (net.Listen on HOST_IPADDRESS) runs on the macOS host process and requires
-  # the address to be local — add a temporary lo0 alias so the probe succeeds.
-  # IMPORTANT: the alias is removed before util::check_clusters_ready below;
-  # keeping it would route kubectl healthz traffic to loopback instead of the VM.
-  if [[ "$(uname)" == "Darwin" ]]; then
-    sudo ifconfig lo0 alias "${HOST_IPADDRESS}" 255.255.255.255 2>/dev/null || true
-    echo "Added lo0 alias ${HOST_IPADDRESS} for kind port probe"
-  fi
+  # the address to be a local interface. The lo0 alias for HOST_IPADDRESS is
+  # added at the END of the CI "install colima" step (step 4), BEFORE the curl
+  # connectivity loop, so the routing-cache flush it causes is absorbed there
+  # rather than here mid-step — which would cancel the runner via lost heartbeat.
   util::create_cluster "${HOST_CLUSTER_NAME}" "${MAIN_KUBECONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/karmada-host.yaml
 else
   util::create_cluster "${HOST_CLUSTER_NAME}" "${MAIN_KUBECONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}"
@@ -182,6 +179,7 @@ util::create_cluster "${MEMBER_CLUSTER_2_NAME}" "${MEMBER_CLUSTER_2_TMP_CONFIG}"
 util::create_cluster "${PULL_MODE_CLUSTER_NAME}" "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member3.yaml
 
 # Remove lo0 alias now that all kind cluster port probes are complete.
+# The alias was added at the end of the CI "install colima" step (step 4).
 # kind's port probe (net.Listen) runs before container creation. Once each
 # kind node container is running, its probe is definitively done.
 # Keeping the alias routes kubectl traffic to loopback instead of the VM,
