@@ -590,8 +590,23 @@ jobs:
           # failures in util::check_clusters_ready.
           mkdir -p /tmp/karmada
           export PATH=/usr/local/go/bin:/usr/local/bin:$PATH
-          # Host-side kind creation logs (always present after util::create_cluster)
-          ls /tmp/karmada/*.log 2>/dev/null && echo "--- kind creation logs (host side) ---" || true
+          # --- Diagnostic: running processes and containers ---
+          echo "=== Running kind processes ==="
+          ps aux | grep kind | grep -v grep || echo "(none)"
+          echo "=== Docker containers ==="
+          docker ps -a 2>/dev/null || echo "(docker ps failed)"
+          echo "=== colima status ==="
+          colima status 2>/dev/null || echo "(colima not running)"
+          echo "=== ~/.kube contents ==="
+          ls -la ~/.kube/ 2>/dev/null || echo "(~/.kube not found)"
+          # --- Print host-side kind creation logs (crucial for debugging) ---
+          for logfile in /tmp/karmada/karmada-host.log /tmp/karmada/member1.log /tmp/karmada/member2.log /tmp/karmada/member3.log /tmp/karmada/delete-necessary-resources.log; do
+            if [[ -f "$logfile" ]]; then
+              echo "=== ${logfile} ==="
+              cat "$logfile"
+              echo "=== end ${logfile} ==="
+            fi
+          done
           for cluster in karmada-host member1 member2 member3; do
             kind export logs /tmp/karmada --name "${cluster}" 2>/dev/null || true
           done
