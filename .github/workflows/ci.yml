@@ -554,6 +554,21 @@ jobs:
           # MAC_NIC_IPADDRESS: honoured by util::get_macos_ipaddress (early-return path)
           #   so the Karmada API server binds to VM_IP:5443 (reachable from macOS + VM).
           echo "MAC_NIC_IPADDRESS=${VM_IP}" >> $GITHUB_ENV
+          # colima's VZ --network-address briefly disrupts macOS host network routing
+          # when the vmnet interface activates. If the GitHub Actions runner daemon
+          # loses its heartbeat connection to GitHub at this moment, the NEXT step
+          # is marked "The operation was canceled" before it produces any log output.
+          # Wait here (still in step 4) until HTTPS to GitHub is restored, so the
+          # runner is fully reconnected before step 5 begins.
+          echo "Waiting for macOS host network to stabilize after colima vmnet activation..."
+          for _i in $(seq 1 30); do
+            if curl -sf --max-time 5 https://api.github.com/zen > /dev/null 2>&1; then
+              echo "macOS host network: ok (attempt ${_i})"
+              break
+            fi
+            echo "  attempt ${_i}: GitHub not reachable yet, retrying in 2s..."
+            sleep 2
+          done
       - name: setup e2e test environment
         run: |
           # Runs directly on macOS host — no colima ssh wrapper.
