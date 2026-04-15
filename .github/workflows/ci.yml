@@ -268,21 +268,40 @@ jobs:
           # Install pinned versions directly from GitHub/Docker releases to avoid
           # silent version drift from brew. Versions are pinned in the job env block.
           #
+          # --connect-timeout 30 --max-time 300: prevent silent hangs on flaky runners.
+          # Without these, curl waits indefinitely and produces zero output, making the
+          # step appear to succeed until bash -e catches the pipe exit code.
+          #
           # lima: colima is a wrapper around Lima — limactl must be on PATH before colima start
-          curl -fsSL "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-x86_64.tar.gz" \
-            | sudo tar -xz --strip=1 -C /usr/local
+          echo "Downloading lima v${LIMA_VERSION}..."
+          curl -fsSL --connect-timeout 30 --max-time 300 \
+            "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Darwin-x86_64.tar.gz" \
+            | sudo tar -xz --strip=1 -C /usr/local \
+            || { echo "ERROR: failed to download/extract lima v${LIMA_VERSION}"; exit 1; }
+          echo "lima installed: $(limactl --version 2>/dev/null || echo unknown)"
           # colima: runs a Linux VM via Hypervisor.framework so Docker containers work on macOS
-          curl -fsSL "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-x86_64" \
-            -o /usr/local/bin/colima && chmod +x /usr/local/bin/colima
+          echo "Downloading colima v${COLIMA_VERSION}..."
+          curl -fsSL --connect-timeout 30 --max-time 120 \
+            "https://github.com/abiosoft/colima/releases/download/v${COLIMA_VERSION}/colima-Darwin-x86_64" \
+            -o /usr/local/bin/colima && chmod +x /usr/local/bin/colima \
+            || { echo "ERROR: failed to download colima v${COLIMA_VERSION}"; exit 1; }
+          echo "colima installed: $(colima version 2>/dev/null || echo unknown)"
           # docker: CLI to talk to the daemon inside the Colima VM
-          curl -fsSL "https://download.docker.com/mac/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
-            | tar -xz --strip=1 -C /usr/local/bin docker/docker
+          echo "Downloading docker v${DOCKER_VERSION}..."
+          curl -fsSL --connect-timeout 30 --max-time 120 \
+            "https://download.docker.com/mac/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" \
+            | tar -xz --strip=1 -C /usr/local/bin docker/docker \
+            || { echo "ERROR: failed to download/extract docker v${DOCKER_VERSION}"; exit 1; }
+          echo "docker installed: $(docker --version 2>/dev/null || echo unknown)"
           # docker-buildx: hack/docker.sh passes --provenance=false to docker build which requires
           #   the buildx plugin; Colima's Docker does not include it by default
           mkdir -p ~/.docker/cli-plugins
-          curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
-            -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
-          echo "Installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
+          echo "Downloading docker-buildx v${DOCKER_BUILDX_VERSION}..."
+          curl -fsSL --connect-timeout 30 --max-time 120 \
+            "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.darwin-amd64" \
+            -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx \
+            || { echo "ERROR: failed to download docker-buildx v${DOCKER_BUILDX_VERSION}"; exit 1; }
+          echo "All tools installed: colima=$(colima version) | docker=$(docker --version) | buildx=$(docker buildx version)"
           # --vm-type vz: Apple Virtualization Framework (VZ) is the only hypervisor
           # available on macOS-26 runners — QEMU is not installed (qemu-img not found).
           # VZ on Intel Mac exposes the native physical CPU, so Go 1.25's pre-compiled
