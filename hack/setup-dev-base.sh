@@ -118,6 +118,22 @@ cp -rf "${REPO_ROOT}"/artifacts/kindClusterConfig/member3.yaml "${TEMP_PATH}"/me
 
 util::delete_necessary_resources "${MAIN_KUBECONFIG},${MEMBER_CLUSTER_KUBECONFIG}" "${HOST_CLUSTER_NAME},${MEMBER_CLUSTER_1_NAME},${MEMBER_CLUSTER_2_NAME},${PULL_MODE_CLUSTER_NAME}" "${KIND_LOG_FILE}"
 
+#step2. make images and get karmadactl BEFORE creating clusters.
+# Building images is CPU/IO-intensive (~16 min) and contends with kind's
+# container boot + kubeadm init if both run concurrently inside the VM.
+# Building first means clusters start on an idle VM and succeed reliably.
+export VERSION="latest"
+export REGISTRY="docker.io/karmada"
+if [[ "${BUILD_FROM_SOURCE}" == "true" ]]; then
+  export KARMADA_IMAGE_LABEL_VALUE="May_be_pruned_in_local_up_environment"
+  export DOCKER_BUILD_ARGS="${DOCKER_BUILD_ARGS:-} --label=image.karmada.io=${KARMADA_IMAGE_LABEL_VALUE}"
+  make images GOOS="linux" --directory="${REPO_ROOT}"
+  #clean up dangling images
+  docker image prune --force --filter "label=image.karmada.io=${KARMADA_IMAGE_LABEL_VALUE}"
+fi
+GO111MODULE=on go install "github.com/karmada-io/karmada/cmd/karmadactl"
+
+#step1. create host cluster and member clusters in parallel (after images are built)
 if [[ -n "${HOST_IPADDRESS}" ]]; then # If bind the port of clusters(karmada-host, member1 and member2) to the host IP
   util::verify_ip_address "${HOST_IPADDRESS}"
   cp -rf "${REPO_ROOT}"/artifacts/kindClusterConfig/karmada-host.yaml "${TEMP_PATH}"/karmada-host.yaml
@@ -132,18 +148,6 @@ fi
 util::create_cluster "${MEMBER_CLUSTER_1_NAME}" "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member1.yaml
 util::create_cluster "${MEMBER_CLUSTER_2_NAME}" "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member2.yaml
 util::create_cluster "${PULL_MODE_CLUSTER_NAME}" "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member3.yaml
-
-#step2. make images and get karmadactl
-export VERSION="latest"
-export REGISTRY="docker.io/karmada"
-if [[ "${BUILD_FROM_SOURCE}" == "true" ]]; then
-  export KARMADA_IMAGE_LABEL_VALUE="May_be_pruned_in_local_up_environment"
-  export DOCKER_BUILD_ARGS="${DOCKER_BUILD_ARGS:-} --label=image.karmada.io=${KARMADA_IMAGE_LABEL_VALUE}"
-  make images GOOS="linux" --directory="${REPO_ROOT}"
-  #clean up dangling images
-  docker image prune --force --filter "label=image.karmada.io=${KARMADA_IMAGE_LABEL_VALUE}"
-fi
-GO111MODULE=on go install "github.com/karmada-io/karmada/cmd/karmadactl"
 
 #step3. wait until clusters ready
 echo "Waiting for the clusters to be ready..."
