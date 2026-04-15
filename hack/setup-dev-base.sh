@@ -133,7 +133,14 @@ if [[ "${BUILD_FROM_SOURCE}" == "true" ]]; then
 fi
 GO111MODULE=on go install "github.com/karmada-io/karmada/cmd/karmadactl"
 
-#step1. create host cluster and member clusters in parallel (after images are built)
+#step1. create clusters: karmada-host first (alone), then member clusters in parallel.
+# karmada-host has extra port mappings and its kubeadm init takes ~7 min. Running it
+# alone (waiting for completion via $!) before launching the 3 member clusters achieves
+# two things:
+#   1. karmada-host gets full VM resources during its kubeadm init — no 300s timeout
+#      race from util::check_clusters_ready being called while kind is still running.
+#   2. Member clusters run in parallel with less contention (only 3 concurrent kubeadm
+#      inits instead of 4), fixing the "Starting control-plane ✗" failures.
 if [[ -n "${HOST_IPADDRESS}" ]]; then # If bind the port of clusters(karmada-host, member1 and member2) to the host IP
   util::verify_ip_address "${HOST_IPADDRESS}"
   cp -rf "${REPO_ROOT}"/artifacts/kindClusterConfig/karmada-host.yaml "${TEMP_PATH}"/karmada-host.yaml
@@ -145,6 +152,21 @@ if [[ -n "${HOST_IPADDRESS}" ]]; then # If bind the port of clusters(karmada-hos
 else
   util::create_cluster "${HOST_CLUSTER_NAME}" "${MAIN_KUBECONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}"
 fi
+KARMADA_HOST_KIND_PID=$!  # PID of the nohup kind process launched by util::create_cluster
+
+# Block until karmada-host's kind process exits (success or failure).
+# util::check_clusters_ready has a 300s timeout on the kubeconfig file; waiting
+# here means the kubeconfig already exists when check_clusters_ready runs, so it
+# passes immediately without racing the 300s clock.
+echo "Waiting for karmada-host cluster creation to complete..."
+wait "${KARMADA_HOST_KIND_PID}" || true
+if [[ ! -f "${MAIN_KUBECONFIG}" ]]; then
+  echo "[ERROR] karmada-host cluster creation failed (kubeconfig not written). See ${KIND_LOG_FILE}/${HOST_CLUSTER_NAME}.log"
+  exit 1
+fi
+echo "karmada-host created. Starting member clusters in parallel..."
+
+# Now create member clusters in parallel (VM resources freed from karmada-host)
 util::create_cluster "${MEMBER_CLUSTER_1_NAME}" "${MEMBER_CLUSTER_1_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member1.yaml
 util::create_cluster "${MEMBER_CLUSTER_2_NAME}" "${MEMBER_CLUSTER_2_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member2.yaml
 util::create_cluster "${PULL_MODE_CLUSTER_NAME}" "${PULL_MODE_CLUSTER_TMP_CONFIG}" "${CLUSTER_VERSION}" "${KIND_LOG_FILE}" "${TEMP_PATH}"/member3.yaml
