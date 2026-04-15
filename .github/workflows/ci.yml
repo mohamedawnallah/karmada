@@ -208,6 +208,15 @@ jobs:
           sudo curl -fsSL \
             "https://dl.k8s.io/release/${{ matrix.k8s }}/bin/darwin/amd64/kubectl" \
             -o /usr/local/bin/kubectl && sudo chmod +x /usr/local/bin/kubectl
+          # Download Alpine minirootfs HERE (before colima start) because colima's
+          # VZ --network-address mode temporarily disrupts macOS host DNS during startup.
+          # The file is shared into the colima VM via virtiofs (colima mounts ${HOME}
+          # at the same path inside the VM) so no network access is needed from the VM.
+          curl -fsSL --max-time 120 --retry 3 --retry-delay 2 \
+            "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
+            -o "${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
+            || { echo "FATAL: cannot download Alpine rootfs"; exit 1; }
+          echo "Alpine rootfs downloaded: $(ls -lh ${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz)"
           export PATH=/usr/local/go/bin:$PATH
           echo "Installed on macOS host: go=$(go version) | kind=$(kind version) | kubectl=$(kubectl version --client)"
       - name: install and start colima (docker) with network address
@@ -402,18 +411,10 @@ jobs:
           # registry-1.docker.io (Docker Hub registry, hosted on AWS) returns
           # "connection refused" from the colima VM on Azure macOS runners — Azure likely
           # blocks or interferes with those specific AWS IP ranges outbound. Alpine Linux's
-          # CDN (dl-cdn.alpinelinux.org via Fastly) is accessible from the macOS host.
-          # Download on the macOS HOST (full internet access) and share into the VM via
-          # virtiofs — colima mounts ${HOME} at the same path inside the VM read-only,
-          # so the file is immediately visible without any network access from the VM.
+          # CDN rootfs was downloaded in the previous step (before colima start, when host
+          # DNS is clean). colima mounts ${HOME} via virtiofs at the same path inside the
+          # VM, so the file is visible inside the VM with no network access needed.
           # 'FROM scratch' + ADD in docker build requires NO network access inside the VM.
-          echo "Downloading Alpine rootfs on macOS host (virtiofs share)..."
-          ALPINE_ROOTFS="${HOME}/alpine-minirootfs-3.23.3-x86_64.tar.gz"
-          curl -fsSL --max-time 120 --retry 3 --retry-delay 2 \
-            "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.3-x86_64.tar.gz" \
-            -o "${ALPINE_ROOTFS}" \
-            || { echo "FATAL: cannot download Alpine rootfs on macOS host"; exit 1; }
-          echo "Alpine rootfs downloaded: $(ls -lh ${ALPINE_ROOTFS})"
           echo "Building alpine:3.23.3 inside VM using virtiofs-shared rootfs..."
           ALPINE_SCRIPT=$(mktemp)
           printf '%s\n' \
